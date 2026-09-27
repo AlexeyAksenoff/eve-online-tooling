@@ -253,3 +253,94 @@ describe("FW NPC kills column", () => {
     expect(within(rows[1]).queryByText("FarmSystem")).toBeInTheDocument();
   });
 });
+
+describe("FW proximity filter", () => {
+  it("is hidden without an active character; 'all' behaves like before", async () => {
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("button", { name: "3j" }),
+    ).not.toBeInTheDocument();
+    // All four fixture systems still present — unfiltered.
+    expect(inTable().getByText("FightVille")).toBeInTheDocument();
+    expect(inTable().getByText("VulnBurg")).toBeInTheDocument();
+    expect(inTable().getByText("RebelHold")).toBeInTheDocument();
+  });
+
+  it("filters the table by jump radius when a character is active, and persists", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      auth_active_character: () => 1,
+      // QuietTown 2j, FightVille 6j, VulnBurg 12j; RebelHold absent (unreachable).
+      intel_fw_jumps: () => ({
+        characterSystemId: 1,
+        jumps: { "1": 2, "2": 6, "3": 12 },
+      }),
+      intel_fw_enlistment: () => null,
+    });
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "5j" }));
+    await waitFor(() =>
+      expect(inTable().queryByText("FightVille")).not.toBeInTheDocument(),
+    );
+    // Within 5 jumps: only QuietTown (2j). 6j/12j/unreachable all excluded.
+    expect(inTable().getByText("QuietTown")).toBeInTheDocument();
+    expect(inTable().queryByText("VulnBurg")).not.toBeInTheDocument();
+    expect(inTable().queryByText("RebelHold")).not.toBeInTheDocument();
+    expect(localStorage.getItem("fw.proximityRadius")).toBe('"5"');
+
+    fireEvent.click(screen.getByRole("button", { name: "10j" }));
+    await waitFor(() =>
+      expect(inTable().getByText("FightVille")).toBeInTheDocument(),
+    );
+    // Within 10 jumps: QuietTown (2j) + FightVille (6j); 12j/unreachable stay out.
+    expect(inTable().queryByText("VulnBurg")).not.toBeInTheDocument();
+    expect(inTable().queryByText("RebelHold")).not.toBeInTheDocument();
+
+    // Two "All" buttons exist (Show filter + proximity filter); the
+    // proximity one renders second.
+    fireEvent.click(screen.getAllByRole("button", { name: "All" })[1]);
+    await waitFor(() =>
+      expect(inTable().getByText("VulnBurg")).toBeInTheDocument(),
+    );
+    expect(inTable().getByText("RebelHold")).toBeInTheDocument();
+  });
+
+  it("combines with the contested filter in the count label", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      auth_active_character: () => 1,
+      intel_fw_jumps: () => ({
+        characterSystemId: 1,
+        jumps: { "1": 2, "2": 3 },
+      }),
+      intel_fw_enlistment: () => null,
+    });
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+
+    // Within 5j: QuietTown (uncontested) + FightVille (contested) — 2 of 2.
+    fireEvent.click(screen.getByRole("button", { name: "5j" }));
+    await waitFor(() =>
+      expect(screen.getByText("2 of 2 systems")).toBeInTheDocument(),
+    );
+
+    // Add the contested-only filter on top: 1 of 2 (FightVille only).
+    fireEvent.click(screen.getByRole("button", { name: "Contested" }));
+    await waitFor(() =>
+      expect(screen.getByText("1 of 2 systems")).toBeInTheDocument(),
+    );
+  });
+});
