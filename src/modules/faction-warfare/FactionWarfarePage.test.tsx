@@ -11,6 +11,7 @@ function node(
   occupierId = 500003,
   occupier = "Amarr",
   battlefield = "rearguard",
+  vpVelocity: number | null = null,
 ): FwSystemNode {
   return {
     systemId: id,
@@ -28,6 +29,7 @@ function node(
     npcKills: 0,
     jumps: 0,
     battlefield,
+    vpVelocity,
     x: id * 1e15,
     z: id * 1e15,
   };
@@ -273,6 +275,41 @@ describe("FW NPC kills column", () => {
     // Header row + 2 data rows; after a desc-toggle click the highest NPC
     // kill count (FarmSystem) should lead.
     expect(within(rows[1]).queryByText("FarmSystem")).toBeInTheDocument();
+  });
+});
+
+describe("FW VP trend column", () => {
+  it("shows a trend arrow when velocity data exists, and a dash otherwise", async () => {
+    const trendNodes = [
+      // node(name, contested, id, occupierId, occupier, battlefield, vpVelocity)
+      node("ClimbingFast", "contested", 40, 500003, "Amarr", "rearguard", 0.15),
+      node("Climbing", "contested", 41, 500003, "Amarr", "rearguard", 0.05),
+      node("Holding", "contested", 42, 500003, "Amarr", "rearguard", 0),
+      node("Falling", "contested", 43, 500003, "Amarr", "rearguard", -0.1),
+      node("NoHistoryYet", "contested", 44, 500003, "Amarr", "rearguard", null),
+    ];
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: trendNodes, edges: [] }),
+      auth_characters: () => [],
+      auth_active_character: () => null,
+    });
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getByText("ClimbingFast")).toBeInTheDocument(),
+    );
+
+    const rowFor = (name: string) => inTable().getByText(name).closest("tr")!;
+    expect(within(rowFor("ClimbingFast")).getByText("↑↑")).toBeInTheDocument();
+    expect(within(rowFor("Climbing")).getByText("↑")).toBeInTheDocument();
+    expect(within(rowFor("Holding")).getByText("→")).toBeInTheDocument();
+    expect(within(rowFor("Falling")).getByText("↓")).toBeInTheDocument();
+    // No history yet — no arrow, just a placeholder dash.
+    const noHistoryRow = rowFor("NoHistoryYet");
+    expect(within(noHistoryRow).queryByText("↑↑")).not.toBeInTheDocument();
+    expect(within(noHistoryRow).queryByText("↑")).not.toBeInTheDocument();
+    expect(within(noHistoryRow).queryByText("→")).not.toBeInTheDocument();
+    expect(within(noHistoryRow).queryByText("↓")).not.toBeInTheDocument();
   });
 });
 

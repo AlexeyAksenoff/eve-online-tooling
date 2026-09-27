@@ -1,5 +1,6 @@
 import { memo } from "react";
 import type { LocalPilot, ZkillStats } from "../../lib/api";
+import { MILITIA_HEX } from "./militiaColors";
 
 /** Memoized: a busy Local paste is 500-2,000 rows x 6 cells; without memo()
  *  every keystroke in the paste textarea and every 30s poll tick re-diffed the
@@ -55,6 +56,26 @@ export const PilotTable = memo(function PilotTable({
                   >
                     {p.name}
                   </a>
+                  {newIds.has(p.characterId) && (
+                    <span
+                      className="ml-2 rounded bg-amber-500/20 px-1 text-[10px] font-medium text-amber-300"
+                      title="Entered Local since your last scan"
+                    >
+                      NEW
+                    </span>
+                  )}
+                  {p.militia && (
+                    <span
+                      className="ml-2 rounded px-1 text-[10px] font-medium"
+                      style={{
+                        backgroundColor: `${MILITIA_HEX[p.militia] ?? "#a1a1aa"}26`,
+                        color: MILITIA_HEX[p.militia] ?? "#a1a1aa",
+                      }}
+                      title="Faction-warfare militia enlistment"
+                    >
+                      {p.militia}
+                    </span>
+                  )}
                   {newIds.has(p.characterId) && (
                     <span
                       className="ml-2 rounded bg-amber-500/20 px-1 text-[10px] font-medium text-amber-300"
