@@ -45,6 +45,11 @@ import {
 } from "./factionPerspective";
 import { trendTier, trendTooltip, TREND_ARROW } from "./vpTrend";
 import { nearestFriendlyFrontline } from "./frontlineRoute";
+import {
+  computeFarmScores,
+  PLAYSTYLE_OPTIONS,
+  type Playstyle,
+} from "./playstyle";
 
 /** The militia picker's selection: Observer (neutral, today's view) or one
  *  of the four militias. */
@@ -172,7 +177,8 @@ type FwSortKey =
   | "kills"
   | "npcKills"
   | "jumps"
-  | "hops";
+  | "hops"
+  | "farmScore";
 
 const FW_SORT_KEYS: readonly FwSortKey[] = [
   "name",
@@ -187,6 +193,7 @@ const FW_SORT_KEYS: readonly FwSortKey[] = [
   "npcKills",
   "jumps",
   "hops",
+  "farmScore",
 ];
 
 /** Numeric rank for sorting battlefield class: frontline (most tactically
@@ -315,6 +322,16 @@ const FW_COLUMNS_PERSPECTIVE: SortColumn<FwSortKey>[] = [
   PERSPECTIVE_COLUMN,
   ...FW_COLUMNS.slice(3),
 ];
+
+/** Plexing-mode-only column (#904), appended when that playstyle is active.
+ *  See {@link computeFarmScores} for the full weighted formula. */
+const FARM_SCORE_COLUMN: SortColumn<FwSortKey> = {
+  key: "farmScore",
+  label: "Farm Score",
+  numeric: true,
+  description:
+    "v1 plexing score: 0.4·capture + 0.25·(low kills) + 0.2·(low NPC kills) + 0.15·(close to me). Higher is safer/faster to farm.",
+};
 
 /**
  * A tile's solid background: the contest-state base, deepened toward red as the
@@ -749,37 +766,65 @@ function Warzone({
     });
   }, [systems, dist, radius, hasCharacter]);
 
+  // Playstyle presets (#904), persisted. "all" keeps today's behaviour
+  // (unfiltered, user-controlled sort). Plexing further filters to
+  // frontline/command-ops; PvP re-sorts only, no filtering.
+  const [playstyle, setPlaystyle] = usePersistentState<Playstyle>(
+    "fw.playstyle",
+    "all",
+  );
+  const playstyleSystems = useMemo(
+    () =>
+      playstyle === "plexing"
+        ? visibleSystems.filter((s) => s.battlefield !== "rearguard")
+        : visibleSystems,
+    [visibleSystems, playstyle],
+  );
+  const farmScores = useMemo(
+    () =>
+      playstyle === "plexing"
+        ? computeFarmScores(playstyleSystems, dist, hasCharacter)
+        : {},
+    [playstyleSystems, dist, hasCharacter, playstyle],
+  );
+  const forcedSort: { key: FwSortKey; dir: "asc" | "desc" } | undefined =
+    playstyle === "pvp"
+      ? { key: "kills", dir: "desc" }
+      : playstyle === "plexing"
+        ? { key: "farmScore", dir: "desc" }
+        : undefined;
+
   const ids = useMemo(
-    () => new Set(visibleSystems.map((s) => s.systemId)),
-    [visibleSystems],
+    () => new Set(playstyleSystems.map((s) => s.systemId)),
+    [playstyleSystems],
   );
 
   const tableSystems = useMemo(() => {
-    if (filter === "all") return visibleSystems;
-    return visibleSystems.filter((s) =>
+    if (filter === "all") return playstyleSystems;
+    return playstyleSystems.filter((s) =>
       filter === "contested"
         ? s.contested !== "uncontested"
         : s.contested === "uncontested",
     );
-  }, [visibleSystems, filter]);
+  }, [playstyleSystems, filter]);
 
   // Lay the tiles out as a top-down star map from real galactic X/Z coords
   // (x → horizontal, z → vertical, flipped so north is up), scaled to fit.
   const graphNodes: SystemGraphNode[] = useMemo(() => {
-    if (visibleSystems.length === 0) return [];
-    const xs = visibleSystems.map((s) => s.x);
-    const zs = visibleSystems.map((s) => s.z);
+    if (playstyleSystems.length === 0) return [];
+    const xs = playstyleSystems.map((s) => s.x);
+    const zs = playstyleSystems.map((s) => s.z);
     const minX = Math.min(...xs);
     const maxX = Math.max(...xs);
     const minZ = Math.min(...zs);
     const maxZ = Math.max(...zs);
     const span = Math.max(maxX - minX, maxZ - minZ) || 1;
     const scale = 2800 / span;
-    const maxKills = Math.max(1, ...visibleSystems.map((s) => s.kills));
+    const maxKills = Math.max(1, ...playstyleSystems.map((s) => s.kills));
     // Scale by real coords (x → horizontal, z → vertical, north up), then snap
     // to a grid so no two tiles overlap on first load.
     const placed = spreadNoOverlap(
-      visibleSystems.map((n) => ({
+      playstyleSystems.map((n) => ({
         id: String(n.systemId),
         x: (n.x - minX) * scale,
         y: (maxZ - n.z) * scale,
@@ -787,10 +832,14 @@ function Warzone({
       168,
       66,
     );
-    return visibleSystems.map((n) => {
+    return playstyleSystems.map((n) => {
       const p = placed.get(String(n.systemId)) ?? { x: 0, y: 0 };
       const hops = dist[String(n.systemId)];
       const isCurrent = n.systemId === characterSystemId;
+      // PvP mode dims rearguard systems (#904) — mute the accent instead of
+      // the usual faction/relationship colour, so frontline/command-ops
+      // stand out as where fights actually concentrate.
+      const dimmed = playstyle === "pvp" && n.battlefield === "rearguard";
       return {
         id: String(n.systemId),
         label: n.name,
@@ -807,20 +856,22 @@ function Warzone({
             ? ` · ${n.kills} kills${n.npcKills > 0 ? ` (${n.npcKills} npc)` : ""}`
             : ""
         }${hops != null ? ` · ${isCurrent ? "here" : `${hops}j`}` : ""}`,
-        accent: perspective
-          ? RELATIONSHIP_HEX[
-              relationshipFor(n.occupierId, perspective.myFaction)
-            ]
-          : (FACTION_HEX[n.occupierId] ?? "#a1a1aa"),
-        ring: CONTEST_RING[n.contested],
-        bg: tileBg(n.contested, n.kills, maxKills),
+        accent: dimmed
+          ? "#3f3f46" // zinc-700 — visibly muted vs. any faction/relationship hue
+          : perspective
+            ? RELATIONSHIP_HEX[
+                relationshipFor(n.occupierId, perspective.myFaction)
+              ]
+            : (FACTION_HEX[n.occupierId] ?? "#a1a1aa"),
+        ring: dimmed ? undefined : CONTEST_RING[n.contested],
+        bg: dimmed ? undefined : tileBg(n.contested, n.kills, maxKills),
         current: isCurrent,
         group: n.region,
         x: p.x,
         y: p.y,
       };
     });
-  }, [visibleSystems, dist, characterSystemId, perspective]);
+  }, [playstyleSystems, dist, characterSystemId, perspective, playstyle]);
   const graphEdges: SystemGraphEdge[] = data.edges
     .filter(([a, b]) => ids.has(a) && ids.has(b))
     .map(([a, b]) => ({
@@ -832,12 +883,30 @@ function Warzone({
   // Colour legend for the factions present in this warzone.
   const factions = useMemo(() => {
     const m = new Map<number, string>();
-    for (const s of visibleSystems) m.set(s.occupierId, s.occupier);
+    for (const s of playstyleSystems) m.set(s.occupierId, s.occupier);
     return [...m.entries()];
-  }, [visibleSystems]);
+  }, [playstyleSystems]);
 
   return (
     <div className="mt-4">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-zinc-500">Mode</span>
+        <div className="flex overflow-hidden rounded border border-zinc-700 text-sm">
+          {PLAYSTYLE_OPTIONS.map((p) => (
+            <button
+              key={p.key}
+              onClick={() => setPlaystyle(p.key)}
+              className={`px-3 py-1 ${
+                playstyle === p.key
+                  ? "bg-zinc-700 text-zinc-100"
+                  : "text-zinc-400 hover:bg-zinc-800"
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="text-xs text-zinc-500">Show</span>
         <div className="flex overflow-hidden rounded border border-zinc-700 text-sm">
@@ -876,7 +945,7 @@ function Warzone({
           </>
         )}
         <span className="text-xs text-zinc-600">
-          {tableSystems.length} of {visibleSystems.length} systems
+          {tableSystems.length} of {playstyleSystems.length} systems
         </span>
       </div>
 
@@ -933,10 +1002,13 @@ function Warzone({
         dist={dist}
         hasCharacter={hasCharacter}
         perspective={perspective}
+        farmScores={farmScores}
+        showFarmScore={playstyle === "plexing"}
+        forcedSort={forcedSort}
       />
 
       <div className="mt-4 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-zinc-400">
-        <span>{visibleSystems.length} systems</span>
+        <span>{playstyleSystems.length} systems</span>
         {perspective
           ? (["friendly", "hostile", "cartel"] as const).flatMap((rel) =>
               factions
@@ -1021,12 +1093,22 @@ function SystemTable({
   dist,
   hasCharacter,
   perspective,
+  farmScores,
+  showFarmScore,
+  forcedSort,
 }: {
   systems: FwSystemNode[];
   /** Hop counts keyed by String(systemId), from the active character's location. */
   dist: Record<string, number>;
   hasCharacter: boolean;
   perspective: ActivePerspective;
+  /** Plexing-mode farm score per system id (#904); empty outside that mode. */
+  farmScores: Record<number, number>;
+  showFarmScore: boolean;
+  /** Playstyle-forced sort (#904): PvP forces kills desc, Plexing forces
+   *  farmScore desc. `undefined` in "all" mode uses the persisted user sort
+   *  untouched — switching back to "all" resumes exactly where they left off. */
+  forcedSort?: { key: FwSortKey; dir: "asc" | "desc" };
 }) {
   const { sortKey, sortDir, toggleSort } = usePersistentSort<FwSortKey>(
     "sort.fw-systems",
@@ -1035,7 +1117,12 @@ function SystemTable({
     "asc",
     ["name", "region", "occupier"],
   );
-  const columns = perspective ? FW_COLUMNS_PERSPECTIVE : FW_COLUMNS;
+  const effectiveSortKey = forcedSort?.key ?? sortKey;
+  const effectiveSortDir = forcedSort?.dir ?? sortDir;
+  const baseColumns = perspective ? FW_COLUMNS_PERSPECTIVE : FW_COLUMNS;
+  const columns = showFarmScore
+    ? [...baseColumns, FARM_SCORE_COLUMN]
+    : baseColumns;
 
   // Augment rows with sort-friendly scalar fields, then sort.
   const rows = useMemo(() => {
@@ -1045,6 +1132,7 @@ function SystemTable({
       perspective: Perspective;
       perspectiveRank: number;
       battlefieldRank: number;
+      farmScore: number;
     };
     const augmented: AugRow[] = systems.map((s) => {
       const persp = perspective
@@ -1057,12 +1145,21 @@ function SystemTable({
         perspective: persp,
         perspectiveRank: PERSPECTIVE_RANK[persp ?? "none"],
         battlefieldRank: BATTLEFIELD_RANK[s.battlefield] ?? 2,
+        farmScore: farmScores[s.systemId] ?? 0,
       };
     });
-    return sortRows(augmented, sortKey, sortDir, {
-      nullsLast: sortKey === "hops" || sortKey === "vpVelocity",
+    return sortRows(augmented, effectiveSortKey, effectiveSortDir, {
+      nullsLast:
+        effectiveSortKey === "hops" || effectiveSortKey === "vpVelocity",
     });
-  }, [systems, dist, sortKey, sortDir, perspective]);
+  }, [
+    systems,
+    dist,
+    effectiveSortKey,
+    effectiveSortDir,
+    perspective,
+    farmScores,
+  ]);
 
   return (
     <div className="overflow-auto rounded-lg border border-zinc-800">
@@ -1073,8 +1170,8 @@ function SystemTable({
               <SortHeaderCell
                 key={col.key}
                 column={col}
-                active={sortKey === col.key}
-                dir={sortDir}
+                active={effectiveSortKey === col.key}
+                dir={effectiveSortDir}
                 onClick={toggleSort}
               />
             ))}
@@ -1173,6 +1270,11 @@ function SystemTable({
                     : formatInt(s.hops)
                   : "—"}
               </td>
+              {showFarmScore && (
+                <td className="px-3 py-1.5 text-right tabular-nums text-emerald-300">
+                  {s.farmScore.toFixed(2)}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

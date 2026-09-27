@@ -117,12 +117,78 @@ describe("FW warzone list filter", () => {
     expect(inTable().queryByText("FightVille")).not.toBeInTheDocument();
     expect(inTable().queryByText("VulnBurg")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    fireEvent.click(
+      within(screen.getByText("Show").closest("div")!).getByRole("button", {
+        name: "All",
+      }),
+    );
     await waitFor(() =>
       expect(inTable().getByText("FightVille")).toBeInTheDocument(),
     );
     expect(inTable().getByText("QuietTown")).toBeInTheDocument();
     expect(inTable().getByText("VulnBurg")).toBeInTheDocument();
+  });
+});
+
+describe("FW playstyle presets (#904)", () => {
+  it("PvP mode force-sorts the table by kills desc, ignoring the persisted sort", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({
+        nodes: [
+          node("QuietTown", "uncontested", 1, 500003, "Amarr", "frontline"),
+          {
+            ...node("BusyFront", "contested", 2, 500003, "Amarr", "frontline"),
+            kills: 12,
+          },
+        ],
+        edges: [],
+      }),
+      auth_characters: () => [],
+      auth_active_character: () => null,
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "PvP" }));
+    await waitFor(() => {
+      const rows = inTable().getAllByRole("row");
+      // Header row + BusyFront (12 kills) ahead of QuietTown (0 kills).
+      expect(within(rows[1]).getByText("BusyFront")).toBeInTheDocument();
+    });
+  });
+
+  it("Plexing mode hides rearguard systems and shows a farm score column", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({
+        nodes: [
+          node("FrontSys", "contested", 1, 500003, "Amarr", "frontline"),
+          node("RearSys", "uncontested", 2, 500003, "Amarr", "rearguard"),
+        ],
+        edges: [],
+      }),
+      auth_characters: () => [],
+      auth_active_character: () => null,
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("FrontSys")).toBeInTheDocument(),
+    );
+    expect(inTable().getByText("RearSys")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("columnheader", { name: /Farm Score/i }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Plexing" }));
+    await waitFor(() =>
+      expect(inTable().queryByText("RearSys")).not.toBeInTheDocument(),
+    );
+    expect(inTable().getByText("FrontSys")).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: /Farm Score/i }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -402,9 +468,10 @@ describe("FW proximity filter", () => {
     expect(inTable().queryByText("VulnBurg")).not.toBeInTheDocument();
     expect(inTable().queryByText("RebelHold")).not.toBeInTheDocument();
 
-    // Two "All" buttons exist (Show filter + proximity filter); the
-    // proximity one renders second.
-    fireEvent.click(screen.getAllByRole("button", { name: "All" })[1]);
+    // Three "All" buttons exist now (Mode / Show filter / proximity filter);
+    // the proximity one renders last.
+    const allButtons = screen.getAllByRole("button", { name: "All" });
+    fireEvent.click(allButtons[allButtons.length - 1]);
     await waitFor(() =>
       expect(inTable().getByText("VulnBurg")).toBeInTheDocument(),
     );
