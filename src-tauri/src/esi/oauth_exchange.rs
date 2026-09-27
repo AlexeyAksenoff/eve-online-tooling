@@ -57,6 +57,9 @@ const SCOPES: &[&str] = &[
     // EVE developer application registration before the SSO grant includes them.
     "esi-fittings.read_fittings.v1",
     "esi-fittings.write_fittings.v1",
+    // Faction-warfare militia auto-detect (#901). Must also be enabled on the
+    // EVE developer application registration before the SSO grant includes it.
+    "esi-characters.read_fw_stats.v1",
 ];
 /// How long to wait for the user to complete the browser login.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(180);
