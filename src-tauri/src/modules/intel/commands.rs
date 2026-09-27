@@ -6,7 +6,7 @@
 //! system. Results are cached briefly on disk so flipping to the panel is
 //! instant and we don't hammer ESI.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
@@ -225,6 +225,10 @@ struct EsiKills {
     ship_kills: i64,
     #[serde(default)]
     pod_kills: i64,
+    /// NPC (rat) kills — a plexing-activity proxy (#896): high NPC kills with
+    /// low ship kills suggests active farming rather than PvP.
+    #[serde(default)]
+    npc_kills: i64,
 }
 
 /// Raw `/universe/system_jumps/` entry.
@@ -255,8 +259,20 @@ pub struct FwSystemNode {
     pub vp_pct: f64,
     /// Ship + pod kills in the last hour.
     pub kills: i64,
+    /// NPC (rat) kills in the last hour (#896) — a plexing-activity proxy:
+    /// high NPC kills with low ship kills suggests active farming.
+    pub npc_kills: i64,
     /// Jumps in the last hour (traffic proxy — ESI has no live player count).
     pub jumps: i64,
+    /// "frontline" | "commandops" | "rearguard" — derived from occupancy +
+    /// stargate adjacency (#895); ESI exposes no battlefield classification.
+    pub battlefield: String,
+    /// ΔVP%/hour (#899) over the last ~30 min of on-disk history, expressed
+    /// in the same 0..1 units as `vp_pct` (0.15 = 15 points/hour). `None`
+    /// until at least two samples exist for this system, or right after an
+    /// ownership flip resets its history.
+    #[serde(default)]
+    pub vp_velocity: Option<f64>,
     /// Galactic map-plane coordinates (seed the star-map layout).
     pub x: f64,
     pub z: f64,
@@ -268,6 +284,136 @@ pub struct FwSystemNode {
 pub struct FwMap {
     pub nodes: Vec<FwSystemNode>,
     pub edges: Vec<[i64; 2]>,
+}
+
+/// On-disk key for the rolling VP-history store (#899).
+const VP_HISTORY_KEY: &str = "fw_vp_history";
+/// Samples kept per system: ~30 min of history at the existing 5-min fetch
+/// cadence.
+const VP_HISTORY_MAX_SAMPLES: usize = 6;
+
+/// One point-in-time VP sample, kept just long enough to compute velocity.
+#[derive(Serialize, Deserialize, Clone, Copy)]
+struct VpSample {
+    ts: i64,
+    vp_pct: f64,
+    /// Tracked so an ownership flip can reset the history (see
+    /// [`update_vp_history`]) — pre-flip VP is meaningless once the occupier
+    /// changes.
+    occupier_id: i64,
+}
+
+/// Push a fresh sample for every current FW system into `history`, prune
+/// samples beyond [`VP_HISTORY_MAX_SAMPLES`], and return each system's
+/// ΔVP%/hour computed across its oldest→newest retained sample. `None` for a
+/// system with fewer than two samples (freshly seen, or just flipped).
+///
+/// An ownership flip clears that system's history before pushing the new
+/// sample: VP resets to (near) zero for the new occupier, so a velocity
+/// computed across the flip would read as a nonsensical cliff rather than
+/// "falling" or "rising" — better to report `None` for one cycle than lie.
+///
+/// Systems no longer present in `samples` (left the FW system list) are
+/// dropped from `history` so the store can't grow unbounded over time.
+///
+/// Pure aside from `now` being the caller's clock read — fully unit-tested
+/// without wall-clock time.
+fn update_vp_history(
+    history: &mut HashMap<i64, VecDeque<VpSample>>,
+    samples: &[(i64, i64, f64)],
+    now: i64,
+    max_samples: usize,
+) -> HashMap<i64, f64> {
+    let mut velocity = HashMap::with_capacity(samples.len());
+    for &(system_id, occupier_id, vp_pct) in samples {
+        let history_for_system = history.entry(system_id).or_default();
+        if history_for_system
+            .back()
+            .is_some_and(|last| last.occupier_id != occupier_id)
+        {
+            history_for_system.clear();
+        }
+        history_for_system.push_back(VpSample {
+            ts: now,
+            vp_pct,
+            occupier_id,
+        });
+        while history_for_system.len() > max_samples {
+            history_for_system.pop_front();
+        }
+        if let (Some(first), Some(last)) = (history_for_system.front(), history_for_system.back()) {
+            let dt_hours = (last.ts - first.ts) as f64 / 3600.0;
+            if dt_hours > 0.0 {
+                velocity.insert(system_id, (last.vp_pct - first.vp_pct) / dt_hours);
+            }
+        }
+    }
+    let current: HashSet<i64> = samples.iter().map(|&(id, _, _)| id).collect();
+    history.retain(|id, _| current.contains(id));
+    velocity
+}
+
+/// Battlefield classification (#895): ESI exposes no such field, but it's
+/// fully derivable from occupancy + stargate adjacency, scoped per warzone
+/// so a (geographically rare, but not filtered upstream) cross-warzone
+/// stargate edge can never seed a frontline:
+///
+/// - **frontline**: has a same-warzone neighbour occupied by a different
+///   faction (i.e. sits on the current contact line).
+/// - **commandops**: not itself a frontline, but adjacent to a frontline
+///   system under the *same* occupier (a staging system just behind the
+///   line).
+/// - **rearguard**: everything else.
+///
+/// Pure and warzone-list-sized (a few hundred systems, small constant-factor
+/// adjacency scans) — cheap enough to recompute on every fetch rather than
+/// cache separately, so it can never go stale relative to the occupancy data
+/// it's derived from.
+fn classify_battlefield(nodes: &[FwSystemNode], edges: &[[i64; 2]]) -> HashMap<i64, &'static str> {
+    let info: HashMap<i64, (&str, i64)> = nodes
+        .iter()
+        .map(|n| (n.system_id, (n.warzone.as_str(), n.occupier_id)))
+        .collect();
+    let warzone_of = |id: i64| info.get(&id).map(|&(wz, _)| wz);
+    let occupier_of = |id: i64| info.get(&id).map(|&(_, occ)| occ);
+
+    let mut adj: HashMap<i64, Vec<i64>> = HashMap::new();
+    for &[a, b] in edges {
+        let same_warzone = match (warzone_of(a), warzone_of(b)) {
+            (Some(wa), Some(wb)) => !wa.is_empty() && wa == wb,
+            _ => false,
+        };
+        if same_warzone {
+            adj.entry(a).or_default().push(b);
+            adj.entry(b).or_default().push(a);
+        }
+    }
+
+    let is_frontline = |id: i64| -> bool {
+        let Some(occ) = occupier_of(id) else {
+            return false;
+        };
+        adj.get(&id)
+            .is_some_and(|ns| ns.iter().any(|&n| occupier_of(n) != Some(occ)))
+    };
+
+    nodes
+        .iter()
+        .map(|n| {
+            let id = n.system_id;
+            let label = if is_frontline(id) {
+                "frontline"
+            } else if adj.get(&id).is_some_and(|ns| {
+                ns.iter()
+                    .any(|&nb| occupier_of(nb) == occupier_of(id) && is_frontline(nb))
+            }) {
+                "commandops"
+            } else {
+                "rearguard"
+            };
+            (id, label)
+        })
+        .collect()
 }
 
 /// Every faction-warfare system with its owner/occupier, contested state and
@@ -302,10 +448,12 @@ pub async fn intel_fw_systems(
         .get_json("/latest/universe/system_jumps/", &[])
         .await
         .unwrap_or_default();
-    let kill_map: HashMap<i64, i64> = kills
-        .into_iter()
-        .map(|k| (k.system_id, k.ship_kills + k.pod_kills))
-        .collect();
+    let mut kill_map: HashMap<i64, i64> = HashMap::with_capacity(kills.len());
+    let mut npc_kill_map: HashMap<i64, i64> = HashMap::with_capacity(kills.len());
+    for k in &kills {
+        kill_map.insert(k.system_id, k.ship_kills + k.pod_kills);
+        npc_kill_map.insert(k.system_id, k.npc_kills);
+    }
     let jump_map: HashMap<i64, i64> = jumps
         .into_iter()
         .map(|j| (j.system_id, j.ship_jumps))
@@ -355,12 +503,40 @@ pub async fn intel_fw_systems(
                 contested: s.contested,
                 vp_pct,
                 kills: kill_map.get(&s.solar_system_id).copied().unwrap_or(0),
+                npc_kills: npc_kill_map.get(&s.solar_system_id).copied().unwrap_or(0),
                 jumps: jump_map.get(&s.solar_system_id).copied().unwrap_or(0),
                 x,
                 z,
+                battlefield: String::new(), // filled in below by classify_battlefield
+                vp_velocity: None,          // filled in below by update_vp_history
             }
         })
         .collect();
+    // Derived, not from ESI (#895) — recomputed every fetch from the fresh
+    // occupancy graph, so it never needs its own cache invalidation.
+    let battlefield_by_id = classify_battlefield(&nodes, &edges);
+    for n in &mut nodes {
+        n.battlefield = battlefield_by_id
+            .get(&n.system_id)
+            .copied()
+            .unwrap_or("rearguard")
+            .to_string();
+    }
+    // Contest velocity (#899), only computed on a genuine cache miss (this
+    // whole function early-returns above on a hit) — naturally matches the
+    // ~5-min fetch cadence the on-disk sample history assumes.
+    let mut vp_history: HashMap<i64, VecDeque<VpSample>> =
+        storage::load_data(&dir, VP_HISTORY_KEY).unwrap_or_default();
+    let now = crate::util::time::now_secs() as i64;
+    let samples: Vec<(i64, i64, f64)> = nodes
+        .iter()
+        .map(|n| (n.system_id, n.occupier_id, n.vp_pct))
+        .collect();
+    let velocity_by_id = update_vp_history(&mut vp_history, &samples, now, VP_HISTORY_MAX_SAMPLES);
+    let _ = storage::save_data(&dir, VP_HISTORY_KEY, &vp_history);
+    for n in &mut nodes {
+        n.vp_velocity = velocity_by_id.get(&n.system_id).copied();
+    }
     // Most-contested first in the table (highest capture progress on top).
     nodes.sort_by(|a, b| {
         b.vp_pct
@@ -466,7 +642,33 @@ pub async fn intel_fw_enlistment(
 
 #[cfg(test)]
 mod tests {
-    use super::{faction_name, warzone};
+    use super::{
+        classify_battlefield, faction_name, update_vp_history, warzone, FwSystemNode, VpSample,
+    };
+    use std::collections::{HashMap, VecDeque};
+
+    fn node(id: i64, wz: &str, occupier_id: i64) -> FwSystemNode {
+        FwSystemNode {
+            system_id: id,
+            name: format!("Sys{id}"),
+            region: "Region".into(),
+            warzone: wz.to_string(),
+            security: 0.3,
+            owner: String::new(),
+            occupier: String::new(),
+            owner_id: occupier_id,
+            occupier_id,
+            contested: "contested".into(),
+            vp_pct: 0.0,
+            kills: 0,
+            npc_kills: 0,
+            jumps: 0,
+            x: 0.0,
+            z: 0.0,
+            battlefield: String::new(),
+            vp_velocity: None,
+        }
+    }
 
     #[test]
     fn faction_name_maps_the_four_militias() {
@@ -482,5 +684,147 @@ mod tests {
         assert_eq!(warzone(500003), "Amarr–Minmatar"); // Amarr Empire
         assert_eq!(warzone(500002), "Amarr–Minmatar"); // Minmatar Republic
         assert_eq!(warzone(99), ""); // not a militia
+    }
+
+    #[test]
+    fn frontline_needs_an_enemy_neighbour_in_the_same_warzone() {
+        let nodes = vec![
+            node(1, "Amarr–Minmatar", 500003),
+            node(2, "Amarr–Minmatar", 500002),
+        ];
+        let out = classify_battlefield(&nodes, &[[1, 2]]);
+        assert_eq!(out[&1], "frontline");
+        assert_eq!(out[&2], "frontline");
+    }
+
+    #[test]
+    fn commandops_sits_behind_a_friendly_frontline() {
+        // 3 shares 1's occupier and is adjacent to frontline system 1.
+        let nodes = vec![
+            node(1, "Amarr–Minmatar", 500003),
+            node(2, "Amarr–Minmatar", 500002),
+            node(3, "Amarr–Minmatar", 500003),
+        ];
+        let out = classify_battlefield(&nodes, &[[1, 2], [1, 3]]);
+        assert_eq!(out[&1], "frontline");
+        assert_eq!(out[&3], "commandops");
+    }
+
+    #[test]
+    fn rearguard_is_neither_frontline_nor_adjacent_to_one() {
+        // Chain: 1–2 frontline; 3 (behind 1) commandops; 4 (behind 3) rearguard.
+        let nodes = vec![
+            node(1, "Amarr–Minmatar", 500003),
+            node(2, "Amarr–Minmatar", 500002),
+            node(3, "Amarr–Minmatar", 500003),
+            node(4, "Amarr–Minmatar", 500003),
+        ];
+        let out = classify_battlefield(&nodes, &[[1, 2], [1, 3], [3, 4]]);
+        assert_eq!(out[&4], "rearguard");
+    }
+
+    #[test]
+    fn cross_warzone_edges_never_seed_a_frontline() {
+        // Different occupiers, but different warzones — must stay rearguard.
+        let nodes = vec![
+            node(1, "Amarr–Minmatar", 500003),
+            node(2, "Caldari–Gallente", 500001),
+        ];
+        let out = classify_battlefield(&nodes, &[[1, 2]]);
+        assert_eq!(out[&1], "rearguard");
+        assert_eq!(out[&2], "rearguard");
+    }
+
+    #[test]
+    fn commandops_requires_the_same_occupier_as_the_frontline_neighbour() {
+        // 1–2 frontline (opposite occupiers). 3 shares 2's occupier and is
+        // adjacent to 2 (itself a frontline) → commandops via 2, not via 1.
+        let nodes = vec![
+            node(1, "Amarr–Minmatar", 500003),
+            node(2, "Amarr–Minmatar", 500002),
+            node(3, "Amarr–Minmatar", 500002),
+        ];
+        let out = classify_battlefield(&nodes, &[[1, 2], [2, 3]]);
+        assert_eq!(out[&2], "frontline");
+        assert_eq!(out[&3], "commandops");
+    }
+
+    #[test]
+    fn both_warzones_classify_independently() {
+        let nodes = vec![
+            node(1, "Amarr–Minmatar", 500003),
+            node(2, "Amarr–Minmatar", 500002),
+            node(10, "Caldari–Gallente", 500001),
+            node(11, "Caldari–Gallente", 500004),
+        ];
+        let out = classify_battlefield(&nodes, &[[1, 2], [10, 11]]);
+        assert_eq!(out[&1], "frontline");
+        assert_eq!(out[&10], "frontline");
+        assert_eq!(out[&11], "frontline");
+    }
+    fn empty_history() -> HashMap<i64, VecDeque<VpSample>> {
+        HashMap::new()
+    }
+
+    #[test]
+    fn first_sample_yields_no_velocity() {
+        let mut history = empty_history();
+        let out = update_vp_history(&mut history, &[(1, 500003, 0.10)], 1_000, 6);
+        assert_eq!(out.get(&1), None);
+        assert_eq!(history[&1].len(), 1);
+    }
+
+    #[test]
+    fn two_samples_compute_delta_vp_per_hour() {
+        let mut history = empty_history();
+        update_vp_history(&mut history, &[(1, 500003, 0.10)], 0, 6);
+        // +0.20 VP over 1800s (0.5h) → 0.40/hour.
+        let out = update_vp_history(&mut history, &[(1, 500003, 0.30)], 1_800, 6);
+        assert!((out[&1] - 0.40).abs() < 1e-9);
+    }
+
+    #[test]
+    fn falling_vp_yields_negative_velocity() {
+        let mut history = empty_history();
+        update_vp_history(&mut history, &[(1, 500003, 0.50)], 0, 6);
+        let out = update_vp_history(&mut history, &[(1, 500003, 0.40)], 3_600, 6);
+        assert!((out[&1] - (-0.10)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn history_is_bounded_to_max_samples() {
+        let mut history = empty_history();
+        // Push 8 samples with a 2-sample cap; only the newest 2 should survive,
+        // and velocity should be computed across just those two.
+        for i in 0..8i64 {
+            update_vp_history(&mut history, &[(1, 500003, i as f64 * 0.05)], i * 300, 2);
+        }
+        assert_eq!(history[&1].len(), 2);
+        let out = update_vp_history(&mut history, &[(1, 500003, 0.45)], 2_700, 2);
+        // Oldest retained sample is now the previous push (i=7, vp=0.35, ts=2100);
+        // Δ0.10 over 600s (1/6 h) → 0.60/hour.
+        assert!((out[&1] - 0.60).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ownership_flip_resets_history_and_velocity_goes_null() {
+        let mut history = empty_history();
+        update_vp_history(&mut history, &[(1, 500003, 0.10)], 0, 6);
+        update_vp_history(&mut history, &[(1, 500003, 0.90)], 1_800, 6);
+        // Amarr held it at 90% capture, then Minmatar just captured it — the
+        // flip must reset history rather than reporting a wild negative spike.
+        let out = update_vp_history(&mut history, &[(1, 500002, 0.02)], 3_600, 6);
+        assert_eq!(out.get(&1), None);
+        assert_eq!(history[&1].len(), 1);
+        assert_eq!(history[&1][0].occupier_id, 500002);
+    }
+
+    #[test]
+    fn systems_no_longer_present_are_dropped_from_history() {
+        let mut history = empty_history();
+        update_vp_history(&mut history, &[(1, 500003, 0.1), (2, 500002, 0.1)], 0, 6);
+        update_vp_history(&mut history, &[(1, 500003, 0.2)], 300, 6); // system 2 gone
+        assert!(history.contains_key(&1));
+        assert!(!history.contains_key(&2));
     }
 }

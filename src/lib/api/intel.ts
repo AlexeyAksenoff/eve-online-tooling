@@ -57,8 +57,18 @@ export interface FwSystemNode {
   vpPct: number;
   /** Ship + pod kills in the last hour. */
   kills: number;
+  /** NPC (rat) kills in the last hour (#896) — a plexing-activity proxy:
+   *  high NPC kills with low ship kills suggests active farming. */
+  npcKills: number;
   /** Jumps in the last hour — traffic proxy (ESI has no live player count). */
   jumps: number;
+  /** "frontline" | "commandops" | "rearguard" — derived from occupancy +
+   *  stargate adjacency (#895); ESI exposes no battlefield classification. */
+  battlefield: string;
+  /** ΔVP%/hour (#899) over the last ~30 min of on-disk history, in the same
+   *  0..1 units as `vpPct` (0.15 = 15 points/hour). Null until at least two
+   *  samples exist, or right after an ownership flip resets the history. */
+  vpVelocity: number | null;
   /** Galactic map-plane coordinates (seed the star-map layout). */
   x: number;
   z: number;
