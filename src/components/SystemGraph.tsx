@@ -60,6 +60,20 @@ export interface SystemGraphNode {
   y?: number;
   /** Grouping key (e.g. region) — enables the "Region" cluster layout. */
   group?: string;
+  /** Richer tile content shown by callers with few enough nodes to afford it
+   *  (e.g. FW's proximity-filtered map, #902): a VP% progress bar, a small
+   *  battlefield-class badge, a ship/NPC kills split, and a trend arrow.
+   *  Independent of `stats` (the generic ship/pod-kill row used elsewhere)
+   *  and `sub` (kept for a plain summary line) — both can coexist with
+   *  `detail`. Opt-in per node; other consumers never set this, so their
+   *  tiles are unaffected. */
+  detail?: {
+    vpPct: number;
+    battlefieldLabel?: string;
+    kills: number;
+    npcKills: number;
+    trendArrow?: string;
+  };
 }
 
 export interface SystemGraphEdge {
@@ -201,6 +215,7 @@ type SystemNodeData = {
   ring?: string;
   bg?: string;
   fill?: string;
+  detail?: SystemGraphNode["detail"];
   /** Optional click-to-toggle popover content (shown via NodeToolbar when
    *  the node is selected — i.e. clicked). */
   tooltip?: ReactNode;
@@ -276,6 +291,38 @@ function SystemNode({ data, selected }: NodeProps<Node<SystemNodeData>>) {
         </div>
         {data.sub && (
           <div className="text-[10px] opacity-70 leading-tight">{data.sub}</div>
+        )}
+        {data.detail && (
+          <div className="mt-1 w-full min-w-[84px] space-y-1">
+            {data.detail.battlefieldLabel && (
+              <span className="inline-block rounded bg-zinc-800 px-1 py-0.5 text-[9px] font-medium leading-none text-zinc-300">
+                {data.detail.battlefieldLabel}
+              </span>
+            )}
+            <div
+              className="h-1 w-full overflow-hidden rounded bg-zinc-800"
+              title={`Victory points: ${Math.round(data.detail.vpPct * 100)}%`}
+            >
+              <div
+                className="h-full bg-emerald-500"
+                style={{ width: `${Math.round(data.detail.vpPct * 100)}%` }}
+              />
+            </div>
+            <div className="flex items-center gap-1.5 text-[10px] leading-tight tabular-nums">
+              <span
+                title="Ship kills (last hour)"
+                className={killHeat(data.detail.kills, 10)}
+              >
+                {data.detail.kills}
+              </span>
+              {data.detail.npcKills > 0 && (
+                <span title="NPC kills (last hour)" className="text-zinc-500">
+                  ({data.detail.npcKills} npc)
+                </span>
+              )}
+              {data.detail.trendArrow && <span>{data.detail.trendArrow}</span>}
+            </div>
+          </div>
         )}
         {data.stats && (
           <div
@@ -492,6 +539,7 @@ export function SystemGraph({
         ring: n.ring,
         bg: n.bg,
         fill: n.fill,
+        detail: n.detail,
         tooltip: nodeTooltip?.(n.id),
       },
     }),

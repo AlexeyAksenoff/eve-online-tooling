@@ -592,6 +592,48 @@ describe("FW proximity filter", () => {
   });
 });
 
+describe("FW detailed map tiles (#902)", () => {
+  it("shows compact tiles at full-warzone scope and detailed tiles once the proximity filter is active", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({
+        nodes: [
+          {
+            ...node("FrontSys", "contested", 1, 500003, "Amarr", "frontline"),
+            kills: 5,
+            npcKills: 2,
+            vpPct: 0.6,
+          },
+        ],
+        edges: [],
+      }),
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      auth_active_character: () => 1,
+      intel_fw_enlistment: () => null,
+      intel_fw_jumps: () => ({ characterSystemId: 1, jumps: { "1": 2 } }),
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("FrontSys")).toBeInTheDocument(),
+    );
+
+    // Full-warzone scope (default "all" radius): no VP bar on the tile.
+    expect(screen.queryByTitle(/Victory points/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "5j" }));
+    await waitFor(() =>
+      expect(screen.getByTitle("Victory points: 60%")).toBeInTheDocument(),
+    );
+
+    // Proximity filter off again ("all" of the three "All" buttons, last one).
+    const allButtons = screen.getAllByRole("button", { name: "All" });
+    fireEvent.click(allButtons[allButtons.length - 1]);
+    await waitFor(() =>
+      expect(screen.queryByTitle(/Victory points/)).not.toBeInTheDocument(),
+    );
+  });
+});
+
 describe("FW personal stats card", () => {
   it("is hidden in Observer mode even with a character logged in", async () => {
     mockInvoke({
