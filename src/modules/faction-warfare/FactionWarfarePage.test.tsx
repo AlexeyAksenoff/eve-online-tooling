@@ -147,6 +147,7 @@ describe("FW militia perspective", () => {
       auth_active_character: () => 1,
       intel_fw_enlistment: () => 500003, // Amarr Empire
       intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
+      intel_fw_personal_stats: () => ({ stats: null, missingScope: false }),
     });
     renderWithQuery(<FactionWarfarePage />);
     await waitFor(() =>
@@ -183,6 +184,7 @@ describe("FW militia perspective", () => {
       auth_active_character: () => 1,
       intel_fw_enlistment: () => 500002, // Minmatar Republic
       intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
+      intel_fw_personal_stats: () => ({ stats: null, missingScope: false }),
     });
     const { unmount } = renderWithQuery(<FactionWarfarePage />);
     await waitFor(() =>
@@ -401,5 +403,109 @@ describe("FW proximity filter", () => {
     await waitFor(() =>
       expect(screen.getByText("1 of 2 systems")).toBeInTheDocument(),
     );
+  });
+});
+
+describe("FW personal stats card", () => {
+  it("is hidden in Observer mode even with a character logged in", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      auth_active_character: () => 1,
+      intel_fw_enlistment: () => null,
+      intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
+      intel_fw_personal_stats: () => ({
+        stats: {
+          factionId: 500003,
+          rankName: "Paladin Crusader",
+          killsYesterday: 2,
+          killsTotal: 40,
+          vpYesterday: 100,
+          vpTotal: 5000,
+          enlistedOn: "2024-01-02T03:04:05Z",
+        },
+        missingScope: false,
+      }),
+    });
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/Your record/)).not.toBeInTheDocument();
+  });
+
+  it("shows rank, kills, VP and enlistment date once a militia is selected", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      auth_active_character: () => 1,
+      intel_fw_enlistment: () => 500003,
+      intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
+      intel_fw_personal_stats: () => ({
+        stats: {
+          factionId: 500003,
+          rankName: "Paladin Crusader",
+          killsYesterday: 2,
+          killsTotal: 40,
+          vpYesterday: 100,
+          vpTotal: 5000,
+          enlistedOn: "2024-01-02T03:04:05Z",
+        },
+        missingScope: false,
+      }),
+    });
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(screen.getByText(/Your record/)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Paladin Crusader/)).toBeInTheDocument();
+    expect(screen.getByText(/2 kills/)).toBeInTheDocument();
+    expect(screen.getByText(/40 total/)).toBeInTheDocument();
+    expect(screen.getByText(/100 VP yesterday/)).toBeInTheDocument();
+    expect(screen.getByText(/5,000 total/)).toBeInTheDocument();
+    expect(screen.getByText(/Enlisted 2024-01-02/)).toBeInTheDocument();
+  });
+
+  it("is hidden (not an error) when the character isn't enlisted, even with a militia selected", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      auth_active_character: () => 1,
+      intel_fw_enlistment: () => null,
+      intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
+      intel_fw_personal_stats: () => ({ stats: null, missingScope: false }),
+    });
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    // Not enlisted in any militia, but explicitly select one anyway — the
+    // perspective is active, yet the card stays hidden because stats is null.
+    fireEvent.click(screen.getByRole("button", { name: "Amarr Empire" }));
+    await waitFor(() =>
+      expect(inTable().getAllByText("defend").length).toBeGreaterThan(0),
+    );
+    expect(screen.queryByText(/Your record/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Re-login/)).not.toBeInTheDocument();
+  });
+
+  it("shows a re-login hint (not an error) when the scope is missing", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      auth_active_character: () => 1,
+      intel_fw_enlistment: () => 500003,
+      intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
+      intel_fw_personal_stats: () => ({ stats: null, missingScope: true }),
+    });
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(screen.getByText(/Re-login/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/Your record/)).not.toBeInTheDocument();
   });
 });

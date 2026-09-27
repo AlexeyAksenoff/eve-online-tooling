@@ -9,13 +9,14 @@ import {
   fwSystems,
   intelFwEnlistment,
   intelFwJumps,
+  intelFwPersonalStats,
   intelFwStats,
   setWaypoint,
   type FwJumpResult,
   type FwMap,
   type FwSystemNode,
 } from "../../lib/api";
-import { formatInt, sortRows } from "../../lib/format";
+import { formatEveDateTime, formatInt, sortRows } from "../../lib/format";
 import {
   SystemGraph,
   type SystemGraphNode,
@@ -452,6 +453,15 @@ export function FactionWarfarePage() {
     [activeMilitia],
   );
 
+  // Personal FW stats card (#903): only fetched/shown once a militia is
+  // actively selected — Observer mode has no "me" to report on.
+  const personalStats = useQuery({
+    queryKey: ["intel", "fw-personal-stats"],
+    queryFn: intelFwPersonalStats,
+    enabled: hasCharacter && perspective != null,
+    staleTime: 10 * 60_000,
+  });
+
   // Warzone is derived from the militia once one is selected; Observer mode
   // keeps the manual toggle.
   const activeZone = perspective
@@ -569,6 +579,41 @@ export function FactionWarfarePage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Personal FW stats card (#903): only in the perspective view. */}
+      {perspective && personalStats.data?.stats && (
+        <div
+          className="mt-4 rounded-lg border border-l-4 border-zinc-800 bg-zinc-900/50 p-3"
+          style={{ borderLeftColor: RELATIONSHIP_HEX.friendly }}
+        >
+          <div className="text-xs text-zinc-400">
+            Your record — {personalStats.data.stats.rankName}
+          </div>
+          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-300">
+            <span>
+              {formatInt(personalStats.data.stats.killsYesterday)} kills
+              yesterday · {formatInt(personalStats.data.stats.killsTotal)} total
+            </span>
+            <span>
+              {formatInt(personalStats.data.stats.vpYesterday)} VP yesterday ·{" "}
+              {formatInt(personalStats.data.stats.vpTotal)} total
+            </span>
+            <span>
+              Enlisted{" "}
+              {formatEveDateTime(personalStats.data.stats.enlistedOn).slice(
+                0,
+                10,
+              )}
+            </span>
+          </div>
+        </div>
+      )}
+      {perspective && personalStats.data?.missingScope && (
+        <div className="mt-4 rounded border border-amber-700/40 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
+          Re-login to see your personal FW record — this character&apos;s token
+          predates the read-fw-stats scope.
         </div>
       )}
 

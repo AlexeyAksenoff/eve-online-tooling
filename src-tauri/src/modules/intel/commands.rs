@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
-use crate::esi::{authed_get, resolve_names, AuthState, EsiClient};
+use crate::esi::{authed_get, authed_get_or_none_on_403, resolve_names, AuthState, EsiClient};
 use crate::model::AppError;
 use crate::sde::{cached_adjacency, graph};
 use crate::storage;
@@ -606,13 +606,31 @@ pub async fn intel_fw_jumps(
     })
 }
 
-/// Raw `/characters/{id}/fw/stats/` shape — only the field the militia
-/// auto-detect needs. ESI omits `faction_id` entirely for a character who
-/// has never enlisted.
+/// Raw `/characters/{id}/fw/stats/` shape. ESI omits `faction_id` (and every
+/// other field) entirely for a character who has never enlisted.
 #[derive(Deserialize, Default)]
 struct EsiCharacterFwStats {
     #[serde(default)]
     faction_id: Option<i64>,
+    #[serde(default)]
+    current_rank: Option<i64>,
+    /// RFC-3339 timestamp; omitted (not just null) for an unenlisted character.
+    #[serde(default)]
+    enlisted_on: Option<String>,
+    #[serde(default)]
+    kills: EsiFwCharCounts,
+    #[serde(default)]
+    victory_points: EsiFwCharCounts,
+}
+
+/// `{ yesterday, total }` shape ESI uses for a character's own FW kills/VP
+/// (distinct from the militia-wide [`EsiFwCounts`], which has no `total`).
+#[derive(Deserialize, Default)]
+struct EsiFwCharCounts {
+    #[serde(default)]
+    yesterday: i64,
+    #[serde(default)]
+    total: i64,
 }
 
 /// The active character's current faction-warfare militia, or `None` if
@@ -640,10 +658,159 @@ pub async fn intel_fw_enlistment(
     Ok(stats.ok().and_then(|s| s.faction_id))
 }
 
+/// Militia rank names by faction id, indexed by ESI's `current_rank` (0..=9).
+/// ESI only returns the integer; ranks are honorary titles tied to militia
+/// standing, unchanged since their Empyrean Age introduction. Source: EVE
+/// University wiki "Ranks" page (24th Imperial Crusade / State Protectorate /
+/// Federal Defence Union / Tribal Liberation Force).
+fn rank_name(faction_id: i64, rank: i64) -> Option<&'static str> {
+    let ranks: &[&str] = match faction_id {
+        500001 => &[
+            // Caldari State — State Protectorate
+            "Protectorate Ensign",
+            "Second Lieutenant",
+            "First Lieutenant",
+            "Captain",
+            "Major",
+            "Lieutenant Colonel",
+            "Colonel",
+            "Wing Commander",
+            "Strike Commander",
+            "Brigadier General",
+        ],
+        500002 => &[
+            // Minmatar Republic — Tribal Liberation Force
+            "Nation Warrior",
+            "Spike Lieutenant",
+            "Spear Lieutenant",
+            "Venge Captain",
+            "Lance Commander",
+            "Blade Commander",
+            "Talon Commander",
+            "Voshud Major",
+            "Matar Colonel",
+            "Valklear General",
+        ],
+        500003 => &[
+            // Amarr Empire — 24th Imperial Crusade
+            "Paladin Crusader",
+            "Templar Lieutenant",
+            "Cardinal Lieutenant",
+            "Arch Lieutenant",
+            "Imperial Major",
+            "Marshal Commander",
+            "Imperator Commander",
+            "Tribunus Colonel",
+            "Legatus Commodore",
+            "Divine Commodore",
+        ],
+        500004 => &[
+            // Gallente Federation — Federal Defence Union
+            "Federation Minuteman",
+            "Defender Lieutenant",
+            "Guardian Lieutenant",
+            "Lieutenant Sentinel",
+            "Shield Commander",
+            "Aegis Commander",
+            "Vice Commander",
+            "Major General",
+            "Lieutenant General",
+            "Luminaire General",
+        ],
+        _ => return None,
+    };
+    usize::try_from(rank)
+        .ok()
+        .and_then(|i| ranks.get(i))
+        .copied()
+}
+
+/// The active character's own FW record: militia, rank name, kills, VP, and
+/// enlistment date.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FwPersonalStats {
+    pub faction_id: i64,
+    pub rank_name: String,
+    pub kills_yesterday: i64,
+    pub kills_total: i64,
+    pub vp_yesterday: i64,
+    pub vp_total: i64,
+    /// RFC-3339; `None` if ESI omitted it (shouldn't happen once enlisted,
+    /// but the field is defensively optional).
+    pub enlisted_on: Option<String>,
+}
+
+/// [`intel_fw_personal_stats`]'s result: `stats` is `None` for an unenlisted
+/// or unauthenticated character, or a genuine ESI failure. `missing_scope`
+/// distinguishes the one case that needs a different UI treatment: a 403
+/// specifically, because the account was granted before #901 added
+/// `esi-characters.read_fw_stats.v1` and simply hasn't re-logged-in yet.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FwPersonalStatsResult {
+    pub stats: Option<FwPersonalStats>,
+    pub missing_scope: bool,
+}
+
+/// The active character's personal FW record — rank, kills, VP, enlistment
+/// date — for the perspective view's personal stats card (#903). Cached 10
+/// min per character, matching the other FW queries' cadence.
+#[tauri::command]
+pub async fn intel_fw_personal_stats(
+    app: AppHandle,
+    auth_state: State<'_, AuthState>,
+) -> Result<FwPersonalStatsResult, String> {
+    let empty = FwPersonalStatsResult {
+        stats: None,
+        missing_scope: false,
+    };
+    let Ok((dir, character_id)) = storage::dir_and_primary_character(&app) else {
+        return Ok(empty);
+    };
+    let cache_key = format!("intel_fw_personal_stats_{character_id}");
+    if let Some(cached) = storage::cache_get::<FwPersonalStatsResult>(&dir, &cache_key) {
+        return Ok(cached);
+    }
+    let result = match authed_get_or_none_on_403::<EsiCharacterFwStats>(
+        &auth_state,
+        character_id,
+        &format!("/latest/characters/{character_id}/fw/stats/"),
+    )
+    .await
+    {
+        Ok(Some(s)) => FwPersonalStatsResult {
+            stats: s.faction_id.map(|faction_id| {
+                let rank = s.current_rank.unwrap_or(0);
+                FwPersonalStats {
+                    faction_id,
+                    rank_name: rank_name(faction_id, rank).unwrap_or("Unknown").to_string(),
+                    kills_yesterday: s.kills.yesterday,
+                    kills_total: s.kills.total,
+                    vp_yesterday: s.victory_points.yesterday,
+                    vp_total: s.victory_points.total,
+                    enlisted_on: s.enlisted_on,
+                }
+            }),
+            missing_scope: false,
+        },
+        // 403: distinguished from every other failure mode so the UI can
+        // show a "re-login to enable" hint instead of hiding the card.
+        Ok(None) => FwPersonalStatsResult {
+            stats: None,
+            missing_scope: true,
+        },
+        Err(_) => empty,
+    };
+    let _ = storage::cache_put(&dir, &cache_key, &result, 600);
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_battlefield, faction_name, update_vp_history, warzone, FwSystemNode, VpSample,
+        classify_battlefield, faction_name, rank_name, update_vp_history, warzone, FwSystemNode,
+        VpSample,
     };
     use std::collections::{HashMap, VecDeque};
 
@@ -826,5 +993,24 @@ mod tests {
         update_vp_history(&mut history, &[(1, 500003, 0.2)], 300, 6); // system 2 gone
         assert!(history.contains_key(&1));
         assert!(!history.contains_key(&2));
+    }
+
+    #[test]
+    fn rank_name_maps_all_ten_ranks_per_militia() {
+        assert_eq!(rank_name(500001, 0), Some("Protectorate Ensign"));
+        assert_eq!(rank_name(500001, 9), Some("Brigadier General"));
+        assert_eq!(rank_name(500002, 0), Some("Nation Warrior"));
+        assert_eq!(rank_name(500002, 9), Some("Valklear General"));
+        assert_eq!(rank_name(500003, 0), Some("Paladin Crusader"));
+        assert_eq!(rank_name(500003, 9), Some("Divine Commodore"));
+        assert_eq!(rank_name(500004, 0), Some("Federation Minuteman"));
+        assert_eq!(rank_name(500004, 9), Some("Luminaire General"));
+    }
+
+    #[test]
+    fn rank_name_is_none_out_of_range_or_unknown_faction() {
+        assert_eq!(rank_name(500001, 10), None); // only 0..=9 exist
+        assert_eq!(rank_name(500001, -1), None);
+        assert_eq!(rank_name(0, 0), None); // not a militia
     }
 }

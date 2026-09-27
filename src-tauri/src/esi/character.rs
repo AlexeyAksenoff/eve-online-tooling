@@ -95,6 +95,28 @@ pub async fn authed_get<T: DeserializeOwned>(
     Ok(val)
 }
 
+/// Like [`authed_get`], but distinguishes a 403 (missing scope, or a scope
+/// granted before this call site started requiring it — the user just
+/// hasn't re-logged-in yet) from every other failure. `Ok(None)` means
+/// specifically 403 — callers that need to show a "re-login to enable" hint
+/// rather than a generic error react to that case; any other error still
+/// propagates as `Err`.
+pub async fn authed_get_or_none_on_403<T: DeserializeOwned>(
+    auth: &AuthState,
+    character_id: i64,
+    path: &str,
+) -> Result<Option<T>, AuthError> {
+    match authed_get(auth, character_id, path).await {
+        Ok(v) => Ok(Some(v)),
+        Err(AuthError::Esi(EsiError::Http(e)))
+            if e.status() == Some(reqwest::StatusCode::FORBIDDEN) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// The cached freshness deadline (Unix epoch secs) for a prior
 /// [`authed_get`] call at `path` for `character_id`, if the conditional
 /// cache still holds an entry. Lets callers surface ESI's own
