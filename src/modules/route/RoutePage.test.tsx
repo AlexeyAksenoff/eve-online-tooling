@@ -1,9 +1,20 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { fireEvent, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import type { AppError, SystemActivity } from "../../lib/api";
 import { invokeMock, mockInvoke, renderWithQuery } from "../../test/harness";
 
 import { RoutePage } from "./RoutePage";
+
+// RoutePage's deep-link destination consumption (#908) needs a router
+// context for useLocation.
+function renderPage() {
+  return renderWithQuery(
+    <MemoryRouter>
+      <RoutePage />
+    </MemoryRouter>,
+  );
+}
 
 const SDE_OK = { installed: true, path: "/sde", sizeBytes: 1, updated: false };
 
@@ -30,7 +41,7 @@ describe("RoutePage", () => {
       route_system_activity: () => [SYSTEM],
       route_breadcrumb: () => [],
     });
-    renderWithQuery(<RoutePage />);
+    renderPage();
 
     expect(await screen.findByText("Jita")).toBeInTheDocument();
   });
@@ -47,7 +58,7 @@ describe("RoutePage", () => {
       },
       route_breadcrumb: () => [],
     });
-    renderWithQuery(<RoutePage />);
+    renderPage();
 
     expect(await screen.findByText(/zKillboard timed out/)).toBeInTheDocument();
   });
@@ -77,7 +88,7 @@ describe("RoutePage", () => {
         edges: [[30000142, 30000144]],
       }),
     });
-    renderWithQuery(<RoutePage />);
+    renderPage();
 
     // Distance column appears, the graph renders both systems (each name
     // shows in the graph *and* the table), and the centre is marked.
@@ -97,7 +108,7 @@ describe("RoutePage", () => {
         throw error;
       },
     });
-    renderWithQuery(<RoutePage />);
+    renderPage();
 
     fireEvent.click(
       await screen.findByRole("button", { name: /my location/i }),

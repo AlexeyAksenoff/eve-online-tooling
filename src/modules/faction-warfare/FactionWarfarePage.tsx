@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { Navigation } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -43,6 +44,7 @@ import {
   type Perspective,
 } from "./factionPerspective";
 import { trendTier, trendTooltip, TREND_ARROW } from "./vpTrend";
+import { nearestFriendlyFrontline } from "./frontlineRoute";
 
 /** The militia picker's selection: Observer (neutral, today's view) or one
  *  of the four militias. */
@@ -719,6 +721,19 @@ function Warzone({
   const dist = useMemo(() => jumpResult.data?.jumps ?? {}, [jumpResult.data]);
   const characterSystemId = jumpResult.data?.characterSystemId ?? null;
 
+  // Route to frontline (#908): nearest friendly frontline by hop count,
+  // ties broken toward fewer ship kills (safer arrival). Hidden without a
+  // character or a militia perspective — Observer has no "friendly" side.
+  const nearestFrontline = useMemo(
+    () =>
+      perspective && hasCharacter
+        ? nearestFriendlyFrontline(systems, dist, perspective.myFaction)
+        : null,
+    [systems, dist, perspective, hasCharacter],
+  );
+  const navigate = useNavigate();
+  const [frontlineError, setFrontlineError] = useState<string | null>(null);
+
   // Proximity filter (#898), persisted. "all" or no character → identical to
   // the unfiltered set; scopes both the table and the map together.
   const [radius, setRadius] = usePersistentState<FwProximityRadius>(
@@ -864,6 +879,55 @@ function Warzone({
           {tableSystems.length} of {visibleSystems.length} systems
         </span>
       </div>
+
+      {nearestFrontline && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <span className="text-xs text-zinc-500">Route to frontline</span>
+          <button
+            onClick={() =>
+              navigate("/route", {
+                state: {
+                  destination: {
+                    id: nearestFrontline.systemId,
+                    name: nearestFrontline.name,
+                  },
+                },
+              })
+            }
+            className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
+          >
+            {nearestFrontline.name} ({dist[String(nearestFrontline.systemId)]}j)
+          </button>
+          <div className="group relative">
+            <button
+              onClick={() =>
+                setWaypoint(nearestFrontline.systemId)
+                  .then(() => setFrontlineError(null))
+                  .catch((e) => {
+                    console.error(
+                      `Failed to set destination ${nearestFrontline.name}`,
+                      e,
+                    );
+                    setFrontlineError(
+                      `Couldn't set destination: ${errorMessage(e)}`,
+                    );
+                  })
+              }
+              aria-label="Set in-game waypoint to nearest frontline"
+              className="text-zinc-500 hover:text-indigo-400"
+            >
+              <Navigation size={14} />
+            </button>
+            <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 hidden -translate-x-1/2 whitespace-nowrap rounded bg-zinc-800 px-2 py-0.5 text-xs text-zinc-300 ring-1 ring-zinc-700 group-hover:block">
+              Set route
+            </span>
+          </div>
+          <InlineError
+            message={frontlineError}
+            className="text-xs text-rose-400"
+          />
+        </div>
+      )}
       <SystemTable
         systems={tableSystems}
         dist={dist}

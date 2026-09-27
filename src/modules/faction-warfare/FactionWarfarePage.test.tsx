@@ -1,8 +1,44 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { invokeMock, mockInvoke, renderWithQuery } from "../../test/harness";
 import { FactionWarfarePage } from "./FactionWarfarePage";
 import type { FwSystemNode } from "../../lib/api";
+
+// FactionWarfarePage's "route to nearest frontline" action (#908) needs a
+// router context for useNavigate.
+function renderPage() {
+  return renderWithQuery(
+    <MemoryRouter>
+      <FactionWarfarePage />
+    </MemoryRouter>,
+  );
+}
+
+/** Renders a real "/route" destination alongside the page, showing whatever
+ *  state a navigate("/route", { state }) call handed it — verifies the full
+ *  deep-link hand-off, not just that a button exists. */
+function RouteDestinationProbe() {
+  const location = useLocation();
+  const destination = (
+    location.state as { destination?: { id: number; name: string } } | null
+  )?.destination;
+  return (
+    <div data-testid="route-probe">
+      {destination ? `${destination.name} (${destination.id})` : "no state"}
+    </div>
+  );
+}
+function renderPageWithRoutes() {
+  return renderWithQuery(
+    <MemoryRouter initialEntries={["/"]}>
+      <Routes>
+        <Route path="/" element={<FactionWarfarePage />} />
+        <Route path="/route" element={<RouteDestinationProbe />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
 
 function node(
   name: string,
@@ -60,7 +96,7 @@ beforeEach(() => {
 
 describe("FW warzone list filter", () => {
   it("filters the system table by contested / uncontested / all", async () => {
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
@@ -92,7 +128,7 @@ describe("FW warzone list filter", () => {
 
 describe("FW militia perspective", () => {
   it("Observer mode is the default and has no Defend/Push column", async () => {
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
@@ -104,7 +140,7 @@ describe("FW militia perspective", () => {
   });
 
   it("selecting a militia classifies contested systems as Defend or Push", async () => {
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
@@ -124,7 +160,7 @@ describe("FW militia perspective", () => {
   });
 
   it("flips Defend/Push when the opposing militia is selected", async () => {
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
@@ -149,7 +185,7 @@ describe("FW militia perspective", () => {
       intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
       intel_fw_personal_stats: () => ({ stats: null, missingScope: false }),
     });
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(screen.getByText(/auto-detected/)).toBeInTheDocument(),
     );
@@ -168,7 +204,7 @@ describe("FW militia perspective", () => {
       intel_fw_enlistment: () => null,
       intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
     });
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
@@ -186,7 +222,7 @@ describe("FW militia perspective", () => {
       intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
       intel_fw_personal_stats: () => ({ stats: null, missingScope: false }),
     });
-    const { unmount } = renderWithQuery(<FactionWarfarePage />);
+    const { unmount } = renderPage();
     await waitFor(() =>
       expect(inTable().getAllByText("defend")).toHaveLength(1),
     );
@@ -198,7 +234,7 @@ describe("FW militia perspective", () => {
     unmount();
 
     // Remount: the explicit Observer choice persists over auto-detect.
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
@@ -219,7 +255,7 @@ describe("FW battlefield classification", () => {
       auth_characters: () => [],
       auth_active_character: () => null,
     });
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(inTable().getByText("EdgeSystem")).toBeInTheDocument(),
     );
@@ -231,7 +267,7 @@ describe("FW battlefield classification", () => {
 
 describe("FW map size control", () => {
   it("defaults to M (480px), switches presets, and persists the choice", async () => {
-    const { container } = renderWithQuery(<FactionWarfarePage />);
+    const { container } = renderPage();
     await waitFor(() =>
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
@@ -263,7 +299,7 @@ describe("FW NPC kills column", () => {
       auth_characters: () => [],
       auth_active_character: () => null,
     });
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(inTable().getByText("FarmSystem")).toBeInTheDocument(),
     );
@@ -296,7 +332,7 @@ describe("FW VP trend column", () => {
       auth_characters: () => [],
       auth_active_character: () => null,
     });
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(inTable().getByText("ClimbingFast")).toBeInTheDocument(),
     );
@@ -317,7 +353,7 @@ describe("FW VP trend column", () => {
 
 describe("FW proximity filter", () => {
   it("is hidden without an active character; 'all' behaves like before", async () => {
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
@@ -343,7 +379,7 @@ describe("FW proximity filter", () => {
       }),
       intel_fw_enlistment: () => null,
     });
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
@@ -387,7 +423,7 @@ describe("FW proximity filter", () => {
       }),
       intel_fw_enlistment: () => null,
     });
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
@@ -428,7 +464,7 @@ describe("FW personal stats card", () => {
         missingScope: false,
       }),
     });
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
@@ -456,7 +492,7 @@ describe("FW personal stats card", () => {
         missingScope: false,
       }),
     });
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(screen.getByText(/Your record/)).toBeInTheDocument(),
     );
@@ -478,7 +514,7 @@ describe("FW personal stats card", () => {
       intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
       intel_fw_personal_stats: () => ({ stats: null, missingScope: false }),
     });
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
@@ -502,10 +538,93 @@ describe("FW personal stats card", () => {
       intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
       intel_fw_personal_stats: () => ({ stats: null, missingScope: true }),
     });
-    renderWithQuery(<FactionWarfarePage />);
+    renderPage();
     await waitFor(() =>
       expect(screen.getByText(/Re-login/)).toBeInTheDocument(),
     );
     expect(screen.queryByText(/Your record/)).not.toBeInTheDocument();
+  });
+});
+
+describe("FW route to nearest frontline", () => {
+  const FRONTLINE_NODES = [
+    node("HomeFront", "contested", 50, 500003, "Amarr", "frontline"),
+    node("FarFront", "contested", 51, 500003, "Amarr", "frontline"),
+    node("EnemyFront", "contested", 52, 500002, "Minmatar", "frontline"),
+  ];
+
+  it("is hidden in Observer mode and without a character", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: FRONTLINE_NODES, edges: [] }),
+      auth_characters: () => [],
+      auth_active_character: () => null,
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("HomeFront")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/Route to frontline/)).not.toBeInTheDocument();
+  });
+
+  it("picks the nearest friendly frontline and hands it to the Route module", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: FRONTLINE_NODES, edges: [] }),
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      auth_active_character: () => 1,
+      intel_fw_enlistment: () => 500003,
+      intel_fw_jumps: () => ({
+        characterSystemId: 1,
+        // HomeFront closer (3j) than FarFront (7j); EnemyFront (1j) is the
+        // enemy's, must never be picked despite being nearest overall.
+        jumps: { "50": 3, "51": 7, "52": 1 },
+      }),
+      intel_fw_personal_stats: () => ({ stats: null, missingScope: false }),
+    });
+    renderPageWithRoutes();
+    await waitFor(() =>
+      expect(screen.getByText(/HomeFront \(3j\)/)).toBeInTheDocument(),
+    );
+    // FarFront legitimately appears in the table/map too — only the route
+    // button's "(Nj)" pick needs to exclude it.
+    expect(screen.queryByText(/FarFront \(\d+j\)/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText(/HomeFront \(3j\)/));
+    await waitFor(() =>
+      expect(screen.getByTestId("route-probe")).toHaveTextContent(
+        "HomeFront (50)",
+      ),
+    );
+  });
+
+  it("also offers the in-game waypoint action", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: FRONTLINE_NODES, edges: [] }),
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      auth_active_character: () => 1,
+      intel_fw_enlistment: () => 500003,
+      intel_fw_jumps: () => ({
+        characterSystemId: 1,
+        jumps: { "50": 3, "51": 7, "52": 1 },
+      }),
+      intel_fw_personal_stats: () => ({ stats: null, missingScope: false }),
+      esi_set_waypoint: () => undefined,
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByText(/HomeFront \(3j\)/)).toBeInTheDocument(),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Set in-game waypoint to nearest frontline",
+      }),
+    );
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("esi_set_waypoint", {
+        systemId: 50,
+      }),
+    );
   });
 });
