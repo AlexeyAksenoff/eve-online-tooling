@@ -11,6 +11,16 @@ export interface LocalPilot {
   standing: number | null;
   /** "blue" | "neutral" | "red". */
   threat: string;
+  /** Faction-warfare militia enlistment: one of the four empire militias or
+   *  the Guristas/Angel Cartel pirate factions, or null. Neutral display
+   *  only — no friend/foe judgement here. */
+  militia: string | null;
+}
+
+/** One militia's headcount in the pasted Local list. */
+export interface MilitiaCount {
+  militia: string;
+  count: number;
 }
 
 export interface LocalScanResult {
@@ -20,6 +30,8 @@ export interface LocalScanResult {
   blues: number;
   /** Pasted names that didn't resolve to a character. */
   unresolved: string[];
+  /** Per-militia headcounts, empty if nobody in the list is enlisted. */
+  militiaCounts: MilitiaCount[];
 }
 
 /**
