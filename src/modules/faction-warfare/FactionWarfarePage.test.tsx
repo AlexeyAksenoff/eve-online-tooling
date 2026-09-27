@@ -25,6 +25,7 @@ function node(
     contested,
     vpPct: contested === "uncontested" ? 0 : 0.5,
     kills: 0,
+    npcKills: 0,
     jumps: 0,
     battlefield,
     x: id * 1e15,
@@ -221,5 +222,34 @@ describe("FW battlefield classification", () => {
     expect(inTable().getByText("Frontline")).toBeInTheDocument();
     expect(inTable().getByText("Command Ops")).toBeInTheDocument();
     expect(inTable().getByText("Rearguard")).toBeInTheDocument();
+  });
+});
+
+describe("FW NPC kills column", () => {
+  it("shows NPC kills alongside ship kills, sortable", async () => {
+    const withNpcKills = [
+      { ...node("FarmSystem", "uncontested", 30), npcKills: 42 },
+      { ...node("EmptySystem", "uncontested", 31), npcKills: 0 },
+    ];
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: withNpcKills, edges: [] }),
+      auth_characters: () => [],
+      auth_active_character: () => null,
+    });
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getByText("FarmSystem")).toBeInTheDocument(),
+    );
+    expect(inTable().getByText("42")).toBeInTheDocument();
+
+    // Sortable via its column header.
+    fireEvent.click(
+      screen.getByRole("columnheader", { name: /NPC Kills 1h/i }),
+    );
+    const rows = inTable().getAllByRole("row");
+    // Header row + 2 data rows; after a desc-toggle click the highest NPC
+    // kill count (FarmSystem) should lead.
+    expect(within(rows[1]).queryByText("FarmSystem")).toBeInTheDocument();
   });
 });

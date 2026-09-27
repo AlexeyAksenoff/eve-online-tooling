@@ -225,6 +225,10 @@ struct EsiKills {
     ship_kills: i64,
     #[serde(default)]
     pod_kills: i64,
+    /// NPC (rat) kills — a plexing-activity proxy (#896): high NPC kills with
+    /// low ship kills suggests active farming rather than PvP.
+    #[serde(default)]
+    npc_kills: i64,
 }
 
 /// Raw `/universe/system_jumps/` entry.
@@ -255,6 +259,9 @@ pub struct FwSystemNode {
     pub vp_pct: f64,
     /// Ship + pod kills in the last hour.
     pub kills: i64,
+    /// NPC (rat) kills in the last hour (#896) — a plexing-activity proxy:
+    /// high NPC kills with low ship kills suggests active farming.
+    pub npc_kills: i64,
     /// Jumps in the last hour (traffic proxy — ESI has no live player count).
     pub jumps: i64,
     /// "frontline" | "commandops" | "rearguard" — derived from occupancy +
@@ -368,10 +375,12 @@ pub async fn intel_fw_systems(
         .get_json("/latest/universe/system_jumps/", &[])
         .await
         .unwrap_or_default();
-    let kill_map: HashMap<i64, i64> = kills
-        .into_iter()
-        .map(|k| (k.system_id, k.ship_kills + k.pod_kills))
-        .collect();
+    let mut kill_map: HashMap<i64, i64> = HashMap::with_capacity(kills.len());
+    let mut npc_kill_map: HashMap<i64, i64> = HashMap::with_capacity(kills.len());
+    for k in &kills {
+        kill_map.insert(k.system_id, k.ship_kills + k.pod_kills);
+        npc_kill_map.insert(k.system_id, k.npc_kills);
+    }
     let jump_map: HashMap<i64, i64> = jumps
         .into_iter()
         .map(|j| (j.system_id, j.ship_jumps))
@@ -421,6 +430,7 @@ pub async fn intel_fw_systems(
                 contested: s.contested,
                 vp_pct,
                 kills: kill_map.get(&s.solar_system_id).copied().unwrap_or(0),
+                npc_kills: npc_kill_map.get(&s.solar_system_id).copied().unwrap_or(0),
                 jumps: jump_map.get(&s.solar_system_id).copied().unwrap_or(0),
                 x,
                 z,
@@ -559,6 +569,7 @@ mod tests {
             contested: "contested".into(),
             vp_pct: 0.0,
             kills: 0,
+            npc_kills: 0,
             jumps: 0,
             x: 0.0,
             z: 0.0,

@@ -57,6 +57,9 @@ export interface FwSystemNode {
   vpPct: number;
   /** Ship + pod kills in the last hour. */
   kills: number;
+  /** NPC (rat) kills in the last hour (#896) — a plexing-activity proxy:
+   *  high NPC kills with low ship kills suggests active farming. */
+  npcKills: number;
   /** Jumps in the last hour — traffic proxy (ESI has no live player count). */
   jumps: number;
   /** "frontline" | "commandops" | "rearguard" — derived from occupancy +
