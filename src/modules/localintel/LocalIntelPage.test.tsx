@@ -15,6 +15,7 @@ const PILOT: LocalPilot = {
   alliance: null,
   standing: 0,
   threat: "neutral",
+  militia: null,
 };
 
 const RESULT: LocalScanResult = {
@@ -23,6 +24,7 @@ const RESULT: LocalScanResult = {
   neutrals: 1,
   blues: 0,
   unresolved: [],
+  militiaCounts: [],
 };
 
 beforeEach(() => {
@@ -84,5 +86,32 @@ describe("LocalIntelPage", () => {
     // Let any (wrongly) scheduled fetch flush before asserting.
     await new Promise((r) => setTimeout(r, 50));
     expect(invokeMock).not.toHaveBeenCalledWith("route_location");
+  });
+
+  it("tags an enlisted pilot with a militia chip and shows the per-militia summary", async () => {
+    const militiaPilot: LocalPilot = { ...PILOT, militia: "Caldari State" };
+    const result: LocalScanResult = {
+      pilots: [militiaPilot],
+      reds: 0,
+      neutrals: 1,
+      blues: 0,
+      unresolved: [],
+      militiaCounts: [{ militia: "Caldari State", count: 1 }],
+    };
+    mockInvoke({
+      localintel_scan: () => result,
+      localintel_zkill: () => [],
+    });
+    renderWithQuery(<LocalIntelPage />);
+
+    fireEvent.change(
+      screen.getByPlaceholderText(/paste the local member list/i),
+      { target: { value: "Chribba" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: /scan local/i }));
+
+    await screen.findByText("Chribba");
+    expect(screen.getAllByText("Caldari State").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Caldari State: 1/)).toBeInTheDocument();
   });
 });

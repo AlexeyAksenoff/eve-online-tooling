@@ -13,6 +13,7 @@ function pilot(
     alliance: null,
     standing: null,
     threat: "neutral",
+    militia: null,
     ...overrides,
   };
 }

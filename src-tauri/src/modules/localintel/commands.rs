@@ -38,6 +38,38 @@ pub struct LocalPilot {
     pub standing: Option<f64>,
     /// "blue" (standing > 0) / "red" (< 0) / "neutral" (0 or unknown).
     pub threat: String,
+    /// Faction-warfare militia enlistment (#900): one of the four empire
+    /// militias or the two pirate factions the Havoc insurgency mechanic lets
+    /// players align with, or `None` for anyone else/unenlisted. Neutral
+    /// presentation only — no friend/foe judgement here (that's the FW
+    /// module's militia picker, #901).
+    pub militia: Option<String>,
+}
+
+/// One militia's headcount in the pasted Local list, for the summary line.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MilitiaCount {
+    pub militia: String,
+    pub count: i64,
+}
+
+/// Faction-warfare militia enlistment badge (#900): the four empire militias
+/// plus the two pirate factions Havoc lets players align with. `None` for
+/// everyone else (including unenlisted). Pure and unit-tested; kept local to
+/// this module rather than sharing `intel::commands::faction_name` since the
+/// set here is deliberately wider (includes the two pirate factions, which
+/// the FW warzone view has no use for).
+fn militia_name(faction_id: i64) -> Option<&'static str> {
+    match faction_id {
+        500001 => Some("Caldari State"),
+        500002 => Some("Minmatar Republic"),
+        500003 => Some("Amarr Empire"),
+        500004 => Some("Gallente Federation"),
+        500010 => Some("Guristas"),
+        500011 => Some("Angel Cartel"),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -49,6 +81,9 @@ pub struct LocalScanResult {
     pub blues: i64,
     /// Pasted names that couldn't be resolved to a character.
     pub unresolved: Vec<String>,
+    /// Per-militia headcounts (#900), empty if nobody in the list is
+    /// enlisted. Highest count first.
+    pub militia_counts: Vec<MilitiaCount>,
 }
 
 /// Classify a standing into a threat band. `None`/0.0 = neutral.
@@ -134,6 +169,7 @@ pub async fn localintel_scan(
             neutrals: 0,
             blues: 0,
             unresolved: Vec::new(),
+            militia_counts: Vec::new(),
         });
     }
     let http = auth_state.http();
@@ -246,6 +282,7 @@ pub async fn localintel_scan(
 
     let mut pilots: Vec<LocalPilot> = Vec::new();
     let (mut reds, mut neutrals, mut blues) = (0i64, 0i64, 0i64);
+    let mut militia_tally: HashMap<&'static str, i64> = HashMap::new();
     for c in &characters {
         let aff = aff_by_id.get(&c.id);
         let corporation = aff
@@ -272,6 +309,10 @@ pub async fn localintel_scan(
             "blue" => blues += 1,
             _ => neutrals += 1,
         }
+        let militia = aff.and_then(|a| a.faction_id).and_then(militia_name);
+        if let Some(m) = militia {
+            *militia_tally.entry(m).or_insert(0) += 1;
+        }
         pilots.push(LocalPilot {
             character_id: c.id,
             name: org_names
@@ -284,6 +325,7 @@ pub async fn localintel_scan(
             alliance,
             standing,
             threat: threat.to_string(),
+            militia: militia.map(String::from),
         });
     }
     // Reds first, then neutrals, then blues; by name within a band.
@@ -292,6 +334,19 @@ pub async fn localintel_scan(
             .cmp(&threat_rank(&b.threat))
             .then_with(|| a.name.cmp(&b.name))
     });
+    // Busiest militia first, then alphabetical for a stable tie-break.
+    let mut militia_counts: Vec<MilitiaCount> = militia_tally
+        .into_iter()
+        .map(|(militia, count)| MilitiaCount {
+            militia: militia.to_string(),
+            count,
+        })
+        .collect();
+    militia_counts.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.militia.cmp(&b.militia))
+    });
 
     Ok(LocalScanResult {
         pilots,
@@ -299,6 +354,7 @@ pub async fn localintel_scan(
         neutrals,
         blues,
         unresolved,
+        militia_counts,
     })
 }
 
@@ -791,5 +847,21 @@ mod tests {
         assert_eq!(threat_of(Some(-2.5)), "red");
         assert_eq!(threat_of(Some(0.0)), "neutral");
         assert_eq!(threat_of(None), "neutral");
+    }
+
+    #[test]
+    fn militia_name_recognises_the_four_empires_and_two_pirate_factions() {
+        assert_eq!(militia_name(500001), Some("Caldari State"));
+        assert_eq!(militia_name(500002), Some("Minmatar Republic"));
+        assert_eq!(militia_name(500003), Some("Amarr Empire"));
+        assert_eq!(militia_name(500004), Some("Gallente Federation"));
+        assert_eq!(militia_name(500010), Some("Guristas"));
+        assert_eq!(militia_name(500011), Some("Angel Cartel"));
+    }
+
+    #[test]
+    fn militia_name_is_none_for_non_militia_factions() {
+        assert_eq!(militia_name(500012), None); // Blood Raiders — not FW-aligned
+        assert_eq!(militia_name(0), None);
     }
 }
