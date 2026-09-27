@@ -223,3 +223,25 @@ describe("FW battlefield classification", () => {
     expect(inTable().getByText("Rearguard")).toBeInTheDocument();
   });
 });
+
+describe("FW map size control", () => {
+  it("defaults to M (480px), switches presets, and persists the choice", async () => {
+    const { container } = renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    expect(container.querySelector('[style*="480px"]')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "L" }));
+    await waitFor(() =>
+      expect(container.querySelector('[style*="720px"]')).toBeTruthy(),
+    );
+    expect(localStorage.getItem("fw.mapSize")).toBe('"l"');
+
+    fireEvent.click(screen.getByRole("button", { name: "S" }));
+    await waitFor(() =>
+      expect(container.querySelector('[style*="320px"]')).toBeTruthy(),
+    );
+    expect(localStorage.getItem("fw.mapSize")).toBe('"s"');
+  });
+});
