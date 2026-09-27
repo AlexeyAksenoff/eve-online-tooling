@@ -59,6 +59,9 @@ export interface FwSystemNode {
   kills: number;
   /** Jumps in the last hour — traffic proxy (ESI has no live player count). */
   jumps: number;
+  /** "frontline" | "commandops" | "rearguard" — derived from occupancy +
+   *  stargate adjacency (#895); ESI exposes no battlefield classification. */
+  battlefield: string;
   /** Galactic map-plane coordinates (seed the star-map layout). */
   x: number;
   z: number;

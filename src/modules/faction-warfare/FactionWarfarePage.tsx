@@ -132,6 +132,7 @@ type FwSortKey =
   | "region"
   | "occupier"
   | "perspectiveRank"
+  | "battlefieldRank"
   | "contestedRank"
   | "vpPct"
   | "kills"
@@ -143,12 +144,46 @@ const FW_SORT_KEYS: readonly FwSortKey[] = [
   "region",
   "occupier",
   "perspectiveRank",
+  "battlefieldRank",
   "contestedRank",
   "vpPct",
   "kills",
   "jumps",
   "hops",
 ];
+
+/** Numeric rank for sorting battlefield class: frontline (most tactically
+ *  relevant — active contact line) sorts ahead of rearguard. */
+const BATTLEFIELD_RANK: Record<string, number> = {
+  frontline: 0,
+  commandops: 1,
+  rearguard: 2,
+};
+
+/** Battlefield class → display label. */
+const BATTLEFIELD_LABEL: Record<string, string> = {
+  frontline: "Frontline",
+  commandops: "Command Ops",
+  rearguard: "Rearguard",
+};
+
+/** Battlefield class → chip style. Frontline pays 150% LP and is the only
+ *  class with full plex spawns, so it gets the most attention-grabbing hue. */
+const BATTLEFIELD_STYLE: Record<string, string> = {
+  frontline: "bg-orange-500/15 text-orange-300",
+  commandops: "bg-sky-500/15 text-sky-300",
+  rearguard: "bg-zinc-700/40 text-zinc-400",
+};
+
+/** Derived (#895), not from ESI — see the backend's `classify_battlefield`
+ *  doc comment for the frontline/command-ops/rearguard rules. */
+const BATTLEFIELD_COLUMN: SortColumn<FwSortKey> = {
+  key: "battlefieldRank",
+  label: "Battlefield",
+  numeric: false,
+  description:
+    "Frontline: borders enemy territory (150% LP, full plex spawns). Command Ops: a staging system just behind a friendly frontline. Rearguard: everything else.",
+};
 
 /** Sortable rank for the Defend/Push perspective column: the two
  *  actionable states sort ahead of "nothing to act on here". */
@@ -188,6 +223,7 @@ const FW_COLUMNS: SortColumn<FwSortKey>[] = [
     numeric: false,
     description: "Faction currently occupying this system",
   },
+  BATTLEFIELD_COLUMN,
   {
     key: "contestedRank",
     label: "State",
@@ -599,10 +635,12 @@ function Warzone({
         label: n.name,
         kind: "lowsec" as const,
         sub: `${n.security.toFixed(1)}${
-          n.contested !== "uncontested" ? ` · ${n.contested}` : ""
-        }${n.kills > 0 ? ` · ${n.kills} kills` : ""}${
-          hops != null ? ` · ${isCurrent ? "here" : `${hops}j`}` : ""
-        }`,
+          n.battlefield !== "rearguard"
+            ? ` · ${BATTLEFIELD_LABEL[n.battlefield] ?? n.battlefield}`
+            : ""
+        }${n.contested !== "uncontested" ? ` · ${n.contested}` : ""}${
+          n.kills > 0 ? ` · ${n.kills} kills` : ""
+        }${hops != null ? ` · ${isCurrent ? "here" : `${hops}j`}` : ""}`,
         accent: perspective
           ? RELATIONSHIP_HEX[
               relationshipFor(n.occupierId, perspective.myFaction)
@@ -750,6 +788,7 @@ function SystemTable({
       hops: number | null;
       perspective: Perspective;
       perspectiveRank: number;
+      battlefieldRank: number;
     };
     const augmented: AugRow[] = systems.map((s) => {
       const persp = perspective
@@ -761,6 +800,7 @@ function SystemTable({
         hops: dist[String(s.systemId)] ?? null,
         perspective: persp,
         perspectiveRank: PERSPECTIVE_RANK[persp ?? "none"],
+        battlefieldRank: BATTLEFIELD_RANK[s.battlefield] ?? 2,
       };
     });
     return sortRows(augmented, sortKey, sortDir, {
@@ -805,6 +845,16 @@ function SystemTable({
                     }}
                   />
                   {s.occupier}
+                </span>
+              </td>
+              <td className="px-3 py-1.5">
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${
+                    BATTLEFIELD_STYLE[s.battlefield] ??
+                    BATTLEFIELD_STYLE.rearguard
+                  }`}
+                >
+                  {BATTLEFIELD_LABEL[s.battlefield] ?? s.battlefield}
                 </span>
               </td>
               {perspective && (
