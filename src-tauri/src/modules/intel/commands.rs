@@ -430,6 +430,40 @@ pub async fn intel_fw_jumps(
     })
 }
 
+/// Raw `/characters/{id}/fw/stats/` shape — only the field the militia
+/// auto-detect needs. ESI omits `faction_id` entirely for a character who
+/// has never enlisted.
+#[derive(Deserialize, Default)]
+struct EsiCharacterFwStats {
+    #[serde(default)]
+    faction_id: Option<i64>,
+}
+
+/// The active character's current faction-warfare militia, or `None` if
+/// unenlisted, unauthenticated, or the account lacks the
+/// `esi-characters.read_fw_stats.v1` scope (e.g. it was granted before #901
+/// added the scope — the user simply hasn't re-logged-in yet). Every failure
+/// mode collapses to `None` on purpose: the frontend's only use for this is
+/// "which militia should the perspective picker default to", and "we don't
+/// know" and "not enlisted" both mean the same thing there — fall back to
+/// Observer, never surface an error banner for it.
+#[tauri::command]
+pub async fn intel_fw_enlistment(
+    app: AppHandle,
+    auth_state: State<'_, AuthState>,
+) -> Result<Option<i64>, String> {
+    let Ok((_, character_id)) = storage::dir_and_primary_character(&app) else {
+        return Ok(None);
+    };
+    let stats: Result<EsiCharacterFwStats, _> = authed_get(
+        &auth_state,
+        character_id,
+        &format!("/latest/characters/{character_id}/fw/stats/"),
+    )
+    .await;
+    Ok(stats.ok().and_then(|s| s.faction_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{faction_name, warzone};

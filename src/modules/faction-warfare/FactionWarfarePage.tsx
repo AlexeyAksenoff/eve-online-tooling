@@ -7,6 +7,7 @@ import {
   authCharacters,
   errorMessage,
   fwSystems,
+  intelFwEnlistment,
   intelFwJumps,
   intelFwStats,
   setWaypoint,
@@ -29,6 +30,34 @@ import { InlineError } from "../../components/InlineError";
 import { usePersistentSort } from "../../lib/usePersistentSort";
 import { usePersistentState } from "../../lib/usePersistentState";
 import { FACTION_WARFARE_JUMP_DISTANCE_REFRESH_MS } from "../../lib/refreshIntervals";
+import {
+  enemyFaction,
+  isMilitiaFaction,
+  militiaIdByName,
+  perspectiveFor,
+  relationshipFor,
+  warzoneForFaction,
+  MILITIA_NAME,
+  type MilitiaFactionId,
+  type Perspective,
+} from "./factionPerspective";
+
+/** The militia picker's selection: Observer (neutral, today's view) or one
+ *  of the four militias. */
+type MilitiaChoice = "observer" | MilitiaFactionId;
+
+/** Picker button order, paired by warzone (Caldari/Gallente, then
+ *  Amarr/Minmatar) so opposing militias sit next to each other. */
+const MILITIA_PICKER_ORDER: readonly MilitiaFactionId[] = [
+  500001, 500004, 500003, 500002,
+];
+
+/** The resolved militia perspective passed down to {@link Warzone}: `null`
+ *  in Observer mode. */
+type ActivePerspective = {
+  myFaction: MilitiaFactionId;
+  enemyFaction: MilitiaFactionId;
+} | null;
 
 /** Militia faction id → accent hex, used for the map + legend. */
 const FACTION_HEX: Record<number, string> = {
@@ -44,6 +73,16 @@ const FACTION_HEX_BY_NAME: Record<string, string> = {
   "Minmatar Republic": "#fb7185",
   "Amarr Empire": "#fbbf24",
   "Gallente Federation": "#34d399",
+};
+
+/** Relationship → accent hex, used instead of {@link FACTION_HEX} once a
+ *  militia is selected — friendly always renders the same colour regardless
+ *  of *which* militia is "mine", so the map/legend read as "us vs them"
+ *  rather than tracking a specific faction's usual palette. */
+const RELATIONSHIP_HEX: Record<"friendly" | "hostile" | "cartel", string> = {
+  friendly: "#34d399", // emerald
+  hostile: "#fb7185", // rose
+  cartel: "#a78bfa", // violet
 };
 
 /** Contested-state chip styles. */
@@ -92,6 +131,7 @@ type FwSortKey =
   | "name"
   | "region"
   | "occupier"
+  | "perspectiveRank"
   | "contestedRank"
   | "vpPct"
   | "kills"
@@ -102,12 +142,32 @@ const FW_SORT_KEYS: readonly FwSortKey[] = [
   "name",
   "region",
   "occupier",
+  "perspectiveRank",
   "contestedRank",
   "vpPct",
   "kills",
   "jumps",
   "hops",
 ];
+
+/** Sortable rank for the Defend/Push perspective column: the two
+ *  actionable states sort ahead of "nothing to act on here". */
+const PERSPECTIVE_RANK: Record<"defend" | "push" | "none", number> = {
+  defend: 0,
+  push: 1,
+  none: 2,
+};
+
+/** The perspective column, spliced into {@link FW_COLUMNS} after "Controlled
+ *  by" only while a militia (not Observer) is selected — Observer mode's
+ *  table is otherwise unchanged. */
+const PERSPECTIVE_COLUMN: SortColumn<FwSortKey> = {
+  key: "perspectiveRank",
+  label: "Perspective",
+  numeric: false,
+  description:
+    "Defend: your militia holds it and it's under contest. Push: the enemy holds it and it's under contest.",
+};
 
 const FW_COLUMNS: SortColumn<FwSortKey>[] = [
   {
@@ -159,6 +219,14 @@ const FW_COLUMNS: SortColumn<FwSortKey>[] = [
     numeric: true,
     description: "Shortest stargate route from your current location",
   },
+];
+
+/** {@link FW_COLUMNS} with the Defend/Push column inserted after "Controlled
+ *  by" — used in place of {@link FW_COLUMNS} once a militia is selected. */
+const FW_COLUMNS_PERSPECTIVE: SortColumn<FwSortKey>[] = [
+  ...FW_COLUMNS.slice(0, 3),
+  PERSPECTIVE_COLUMN,
+  ...FW_COLUMNS.slice(3),
 ];
 
 /**
@@ -240,7 +308,60 @@ export function FactionWarfarePage() {
     return [...seen].sort();
   }, [map.data]);
   const [zone, setZone] = useState<string | null>(null);
-  const activeZone = zone ?? warzones[0] ?? null;
+
+  // Militia perspective (#901): `override` is only set once the user
+  // explicitly picks something (including explicitly picking Observer);
+  // until then, default to the active character's enlisted militia if any.
+  const [override, setOverride] = usePersistentState<MilitiaChoice | null>(
+    "fw.militia",
+    null,
+  );
+  const characters = useQuery({
+    queryKey: ["auth", "characters"],
+    queryFn: authCharacters,
+  });
+  const hasCharacter = (characters.data?.length ?? 0) > 0;
+  const enlistment = useQuery({
+    queryKey: ["intel", "fw-enlistment"],
+    queryFn: intelFwEnlistment,
+    enabled: hasCharacter,
+    staleTime: 10 * 60_000,
+  });
+  const autoMilitia: MilitiaChoice =
+    enlistment.data != null && isMilitiaFaction(enlistment.data)
+      ? enlistment.data
+      : "observer";
+  const activeMilitia: MilitiaChoice = override ?? autoMilitia;
+  const perspective: ActivePerspective = useMemo(
+    () =>
+      activeMilitia === "observer"
+        ? null
+        : {
+            myFaction: activeMilitia,
+            enemyFaction: enemyFaction(activeMilitia),
+          },
+    [activeMilitia],
+  );
+
+  // Warzone is derived from the militia once one is selected; Observer mode
+  // keeps the manual toggle.
+  const activeZone = perspective
+    ? warzoneForFaction(perspective.myFaction)
+    : (zone ?? warzones[0] ?? null);
+
+  // Militia summary strip: reordered mine-first/enemy-adjacent once a
+  // militia is selected; Observer mode keeps the existing unordered list.
+  const orderedStats = useMemo(() => {
+    const rows = stats.data ?? [];
+    if (!perspective) return rows;
+    const rank = (name: string) => {
+      const id = militiaIdByName(name);
+      if (id === perspective.myFaction) return 0;
+      if (id === perspective.enemyFaction) return 1;
+      return 2;
+    };
+    return [...rows].sort((a, b) => rank(a.faction) - rank(b.faction));
+  }, [stats.data, perspective]);
 
   return (
     <Page>
@@ -261,53 +382,118 @@ export function FactionWarfarePage() {
         }
       />
 
-      {/* Militia summary strip (systems held / pilots / 24h kills). */}
-      {stats.data && stats.data.length > 0 && (
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {stats.data.map((s, i) => (
-            <div
-              key={i}
-              className="rounded-lg border border-l-4 border-zinc-800 bg-zinc-900/50 p-3"
-              style={{
-                borderLeftColor: FACTION_HEX_BY_NAME[s.faction] ?? "#3f3f46",
-              }}
+      {/* Militia perspective picker (#901): Observer (today's neutral view)
+          or one of the four militias. Picking a militia reframes the page
+          around it — the warzone is derived, the summary strip reorders, and
+          the table/map gain a friend/foe read. */}
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-zinc-500">Perspective</span>
+        <div className="flex overflow-hidden rounded border border-zinc-700 text-sm">
+          <button
+            onClick={() => setOverride("observer")}
+            className={`px-3 py-1 ${
+              activeMilitia === "observer"
+                ? "bg-zinc-700 text-zinc-100"
+                : "text-zinc-400 hover:bg-zinc-800"
+            }`}
+          >
+            Observer
+          </button>
+          {MILITIA_PICKER_ORDER.map((id) => (
+            <button
+              key={id}
+              onClick={() => setOverride(id)}
+              className={`px-3 py-1 ${
+                activeMilitia === id
+                  ? "bg-zinc-700 text-zinc-100"
+                  : "text-zinc-400 hover:bg-zinc-800"
+              }`}
             >
-              <div className="truncate text-xs text-zinc-400">{s.faction}</div>
-              <div className="mt-0.5 text-lg font-semibold tabular-nums text-zinc-100">
-                {formatInt(s.systemsControlled)}
-                <span className="ml-1 text-xs font-normal text-zinc-500">
-                  systems
-                </span>
-              </div>
-              <div className="mt-0.5 text-xs text-zinc-500">
-                {formatInt(s.pilots)} pilots · {formatInt(s.killsYesterday)}{" "}
-                kills 24h
-              </div>
-            </div>
+              {MILITIA_NAME[id]}
+            </button>
           ))}
+        </div>
+        {!override && autoMilitia !== "observer" && (
+          <span className="text-xs text-zinc-600">
+            auto-detected from your enlisted character
+          </span>
+        )}
+      </div>
+
+      {/* Militia summary strip (systems held / pilots / 24h kills). */}
+      {orderedStats.length > 0 && (
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {orderedStats.map((s, i) => {
+            const id = militiaIdByName(s.faction);
+            const hex = perspective
+              ? RELATIONSHIP_HEX[
+                  id != null
+                    ? relationshipFor(id, perspective.myFaction)
+                    : "cartel"
+                ]
+              : (FACTION_HEX_BY_NAME[s.faction] ?? "#3f3f46");
+            return (
+              <div
+                key={i}
+                className="rounded-lg border border-l-4 border-zinc-800 bg-zinc-900/50 p-3"
+                style={{ borderLeftColor: hex }}
+              >
+                <div className="truncate text-xs text-zinc-400">
+                  {s.faction}
+                  {perspective && id === perspective.myFaction && (
+                    <span className="ml-1 text-emerald-400">(you)</span>
+                  )}
+                  {perspective && id === perspective.enemyFaction && (
+                    <span className="ml-1 text-rose-400">(enemy)</span>
+                  )}
+                </div>
+                <div className="mt-0.5 text-lg font-semibold tabular-nums text-zinc-100">
+                  {formatInt(s.systemsControlled)}
+                  <span className="ml-1 text-xs font-normal text-zinc-500">
+                    systems
+                  </span>
+                </div>
+                <div className="mt-0.5 text-xs text-zinc-500">
+                  {formatInt(s.pilots)} pilots · {formatInt(s.killsYesterday)}{" "}
+                  kills 24h
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
-      {/* Warzone selector. */}
-      {warzones.length > 0 && (
-        <div className="mt-5 flex items-center gap-2">
-          <span className="text-xs text-zinc-500">Warzone</span>
-          <div className="flex overflow-hidden rounded border border-zinc-700 text-sm">
-            {warzones.map((w) => (
-              <button
-                key={w}
-                onClick={() => setZone(w)}
-                className={`px-3 py-1 ${
-                  activeZone === w
-                    ? "bg-zinc-700 text-zinc-100"
-                    : "text-zinc-400 hover:bg-zinc-800"
-                }`}
-              >
-                {w}
-              </button>
-            ))}
-          </div>
+      {/* Warzone selector — hidden once a militia is selected, since the
+          warzone is then derived from it. */}
+      {perspective ? (
+        <div className="mt-5 flex items-center gap-2 text-xs text-zinc-500">
+          <span>Warzone</span>
+          <span className="rounded border border-zinc-700 px-3 py-1 text-zinc-300">
+            {activeZone}
+          </span>
+          <span className="text-zinc-600">derived from your perspective</span>
         </div>
+      ) : (
+        warzones.length > 0 && (
+          <div className="mt-5 flex items-center gap-2">
+            <span className="text-xs text-zinc-500">Warzone</span>
+            <div className="flex overflow-hidden rounded border border-zinc-700 text-sm">
+              {warzones.map((w) => (
+                <button
+                  key={w}
+                  onClick={() => setZone(w)}
+                  className={`px-3 py-1 ${
+                    activeZone === w
+                      ? "bg-zinc-700 text-zinc-100"
+                      : "text-zinc-400 hover:bg-zinc-800"
+                  }`}
+                >
+                  {w}
+                </button>
+              ))}
+            </div>
+          </div>
+        )
       )}
 
       {map.isLoading && (
@@ -319,12 +505,22 @@ export function FactionWarfarePage() {
         </div>
       )}
 
-      {map.data && activeZone && <Warzone data={map.data} zone={activeZone} />}
+      {map.data && activeZone && (
+        <Warzone data={map.data} zone={activeZone} perspective={perspective} />
+      )}
     </Page>
   );
 }
 
-function Warzone({ data, zone }: { data: FwMap; zone: string }) {
+function Warzone({
+  data,
+  zone,
+  perspective,
+}: {
+  data: FwMap;
+  zone: string;
+  perspective: ActivePerspective;
+}) {
   const systems = useMemo(
     () => data.nodes.filter((n) => n.warzone === zone),
     [data.nodes, zone],
@@ -407,7 +603,11 @@ function Warzone({ data, zone }: { data: FwMap; zone: string }) {
         }${n.kills > 0 ? ` · ${n.kills} kills` : ""}${
           hops != null ? ` · ${isCurrent ? "here" : `${hops}j`}` : ""
         }`,
-        accent: FACTION_HEX[n.occupierId] ?? "#a1a1aa",
+        accent: perspective
+          ? RELATIONSHIP_HEX[
+              relationshipFor(n.occupierId, perspective.myFaction)
+            ]
+          : (FACTION_HEX[n.occupierId] ?? "#a1a1aa"),
         ring: CONTEST_RING[n.contested],
         bg: tileBg(n.contested, n.kills, maxKills),
         current: isCurrent,
@@ -416,7 +616,7 @@ function Warzone({ data, zone }: { data: FwMap; zone: string }) {
         y: p.y,
       };
     });
-  }, [systems, dist, characterSystemId]);
+  }, [systems, dist, characterSystemId, perspective]);
   const graphEdges: SystemGraphEdge[] = data.edges
     .filter(([a, b]) => ids.has(a) && ids.has(b))
     .map(([a, b]) => ({
@@ -459,19 +659,37 @@ function Warzone({ data, zone }: { data: FwMap; zone: string }) {
         systems={tableSystems}
         dist={dist}
         hasCharacter={hasCharacter}
+        perspective={perspective}
       />
 
       <div className="mt-4 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-zinc-400">
         <span>{systems.length} systems</span>
-        {factions.map(([id, name]) => (
-          <span key={id} className="flex items-center gap-1.5">
-            <span
-              className="h-2.5 w-2.5 rounded-full"
-              style={{ backgroundColor: FACTION_HEX[id] ?? "#a1a1aa" }}
-            />
-            {name}
-          </span>
-        ))}
+        {perspective
+          ? (["friendly", "hostile", "cartel"] as const).flatMap((rel) =>
+              factions
+                .filter(
+                  ([id]) => relationshipFor(id, perspective.myFaction) === rel,
+                )
+                .map(([id, name]) => (
+                  <span key={id} className="flex items-center gap-1.5">
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: RELATIONSHIP_HEX[rel] }}
+                    />
+                    <span className="capitalize text-zinc-500">{rel}:</span>{" "}
+                    {name}
+                  </span>
+                )),
+            )
+          : factions.map(([id, name]) => (
+              <span key={id} className="flex items-center gap-1.5">
+                <span
+                  className="h-2.5 w-2.5 rounded-full"
+                  style={{ backgroundColor: FACTION_HEX[id] ?? "#a1a1aa" }}
+                />
+                {name}
+              </span>
+            ))}
         <span className="text-zinc-600">·</span>
         {(["contested", "vulnerable", "captured"] as const).map((c) => (
           <span key={c} className="flex items-center gap-1.5 capitalize">
@@ -508,11 +726,13 @@ function SystemTable({
   systems,
   dist,
   hasCharacter,
+  perspective,
 }: {
   systems: FwSystemNode[];
   /** Hop counts keyed by String(systemId), from the active character's location. */
   dist: Record<string, number>;
   hasCharacter: boolean;
+  perspective: ActivePerspective;
 }) {
   const { sortKey, sortDir, toggleSort } = usePersistentSort<FwSortKey>(
     "sort.fw-systems",
@@ -521,26 +741,39 @@ function SystemTable({
     "asc",
     ["name", "region", "occupier"],
   );
+  const columns = perspective ? FW_COLUMNS_PERSPECTIVE : FW_COLUMNS;
 
   // Augment rows with sort-friendly scalar fields, then sort.
   const rows = useMemo(() => {
-    type AugRow = FwSystemNode & { contestedRank: number; hops: number | null };
-    const augmented: AugRow[] = systems.map((s) => ({
-      ...s,
-      contestedRank: CONTEST_RANK[s.contested] ?? 0,
-      hops: dist[String(s.systemId)] ?? null,
-    }));
+    type AugRow = FwSystemNode & {
+      contestedRank: number;
+      hops: number | null;
+      perspective: Perspective;
+      perspectiveRank: number;
+    };
+    const augmented: AugRow[] = systems.map((s) => {
+      const persp = perspective
+        ? perspectiveFor(s.occupierId, s.contested, perspective.myFaction)
+        : null;
+      return {
+        ...s,
+        contestedRank: CONTEST_RANK[s.contested] ?? 0,
+        hops: dist[String(s.systemId)] ?? null,
+        perspective: persp,
+        perspectiveRank: PERSPECTIVE_RANK[persp ?? "none"],
+      };
+    });
     return sortRows(augmented, sortKey, sortDir, {
       nullsLast: sortKey === "hops",
     });
-  }, [systems, dist, sortKey, sortDir]);
+  }, [systems, dist, sortKey, sortDir, perspective]);
 
   return (
     <div className="overflow-auto rounded-lg border border-zinc-800">
       <table className="w-full border-collapse text-sm">
         <thead className="bg-zinc-900">
           <tr>
-            {FW_COLUMNS.map((col) => (
+            {columns.map((col) => (
               <SortHeaderCell
                 key={col.key}
                 column={col}
@@ -564,12 +797,33 @@ function SystemTable({
                   <span
                     className="h-2 w-2 rounded-full"
                     style={{
-                      backgroundColor: FACTION_HEX[s.occupierId] ?? "#a1a1aa",
+                      backgroundColor: perspective
+                        ? RELATIONSHIP_HEX[
+                            relationshipFor(s.occupierId, perspective.myFaction)
+                          ]
+                        : (FACTION_HEX[s.occupierId] ?? "#a1a1aa"),
                     }}
                   />
                   {s.occupier}
                 </span>
               </td>
+              {perspective && (
+                <td className="px-3 py-1.5">
+                  {s.perspective ? (
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${
+                        s.perspective === "defend"
+                          ? "bg-emerald-500/15 text-emerald-300"
+                          : "bg-rose-500/15 text-rose-300"
+                      }`}
+                    >
+                      {s.perspective}
+                    </span>
+                  ) : (
+                    <span className="text-zinc-600">—</span>
+                  )}
+                </td>
+              )}
               <td className="px-3 py-1.5">
                 <span
                   className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${

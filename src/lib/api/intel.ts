@@ -93,3 +93,12 @@ export interface FwJumpResult {
 export function intelFwJumps(systemIds: number[]): Promise<FwJumpResult> {
   return invoke<FwJumpResult>("intel_fw_jumps", { systemIds });
 }
+
+/** The active character's current faction-warfare militia (faction id), or
+ * `null` if unenlisted, unauthenticated, or missing the
+ * `esi-characters.read_fw_stats.v1` scope. Used to default the militia
+ * picker; every failure mode collapses to `null` (Observer) rather than an
+ * error. */
+export function intelFwEnlistment(): Promise<number | null> {
+  return invoke<number | null>("intel_fw_enlistment");
+}

@@ -4,17 +4,23 @@ import { invokeMock, mockInvoke, renderWithQuery } from "../../test/harness";
 import { FactionWarfarePage } from "./FactionWarfarePage";
 import type { FwSystemNode } from "../../lib/api";
 
-function node(name: string, contested: string, id: number): FwSystemNode {
+function node(
+  name: string,
+  contested: string,
+  id: number,
+  occupierId = 500003,
+  occupier = "Amarr",
+): FwSystemNode {
   return {
     systemId: id,
     name,
     region: "Devoid",
     warzone: "Amarr–Minmatar",
     security: 0.3,
-    owner: "Amarr",
-    occupier: "Amarr",
-    ownerId: 500003,
-    occupierId: 500003,
+    owner: occupier,
+    occupier,
+    ownerId: occupierId,
+    occupierId,
     contested,
     vpPct: contested === "uncontested" ? 0 : 0.5,
     kills: 0,
@@ -27,6 +33,10 @@ const NODES = [
   node("QuietTown", "uncontested", 1),
   node("FightVille", "contested", 2),
   node("VulnBurg", "vulnerable", 3),
+  // Minmatar-occupied + contested — lets militia-perspective tests see both
+  // "defend" (an Amarr-occupied contested system, from Amarr's perspective)
+  // and "push" (this one, from Amarr's perspective) at once.
+  node("RebelHold", "contested", 4, 500002, "Minmatar"),
 ];
 
 // The star map renders system names too, so scope row assertions to the table.
@@ -72,5 +82,119 @@ describe("FW warzone list filter", () => {
     );
     expect(inTable().getByText("QuietTown")).toBeInTheDocument();
     expect(inTable().getByText("VulnBurg")).toBeInTheDocument();
+  });
+});
+
+describe("FW militia perspective", () => {
+  it("Observer mode is the default and has no Defend/Push column", async () => {
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("columnheader", { name: /Perspective/i }),
+    ).not.toBeInTheDocument();
+    expect(inTable().queryByText("defend")).not.toBeInTheDocument();
+    expect(inTable().queryByText("push")).not.toBeInTheDocument();
+  });
+
+  it("selecting a militia classifies contested systems as Defend or Push", async () => {
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Amarr Empire" }));
+
+    // FightVille + VulnBurg: Amarr-occupied and contested → defend.
+    await waitFor(() =>
+      expect(inTable().getAllByText("defend")).toHaveLength(2),
+    );
+    // RebelHold: Minmatar-occupied and contested → push, from Amarr's view.
+    expect(inTable().getAllByText("push")).toHaveLength(1);
+    // QuietTown: Amarr-occupied but uncontested → neither classification.
+    const quietRow = inTable().getByText("QuietTown").closest("tr")!;
+    expect(within(quietRow).queryByText("defend")).not.toBeInTheDocument();
+    expect(within(quietRow).queryByText("push")).not.toBeInTheDocument();
+  });
+
+  it("flips Defend/Push when the opposing militia is selected", async () => {
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Minmatar Republic" }));
+
+    // From Minmatar's perspective, RebelHold (Minmatar-occupied) is defend,
+    // and the two Amarr-occupied contested systems become push.
+    await waitFor(() =>
+      expect(inTable().getAllByText("defend")).toHaveLength(1),
+    );
+    expect(inTable().getAllByText("push")).toHaveLength(2);
+  });
+
+  it("auto-detects the militia from an enlisted character when unset", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      auth_active_character: () => 1,
+      intel_fw_enlistment: () => 500003, // Amarr Empire
+      intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
+    });
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(screen.getByText(/auto-detected/)).toBeInTheDocument(),
+    );
+    // Defaulted straight to Amarr's perspective without a click.
+    await waitFor(() =>
+      expect(inTable().getAllByText("defend")).toHaveLength(2),
+    );
+  });
+
+  it("falls back to Observer when the character isn't enlisted", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      auth_active_character: () => 1,
+      intel_fw_enlistment: () => null,
+      intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
+    });
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/auto-detected/)).not.toBeInTheDocument();
+    expect(inTable().queryByText("defend")).not.toBeInTheDocument();
+  });
+
+  it("an explicit Observer pick overrides auto-detect and persists", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      auth_active_character: () => 1,
+      intel_fw_enlistment: () => 500002, // Minmatar Republic
+      intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
+    });
+    const { unmount } = renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getAllByText("defend")).toHaveLength(1),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Observer" }));
+    await waitFor(() =>
+      expect(inTable().queryByText("defend")).not.toBeInTheDocument(),
+    );
+    unmount();
+
+    // Remount: the explicit Observer choice persists over auto-detect.
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    expect(inTable().queryByText("defend")).not.toBeInTheDocument();
   });
 });
