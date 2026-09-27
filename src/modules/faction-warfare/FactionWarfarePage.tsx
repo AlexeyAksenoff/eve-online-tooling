@@ -142,6 +142,20 @@ const FW_MAP_SIZES: readonly { key: FwMapSize; label: string }[] = [
   { key: "fill", label: "Fill" },
 ];
 
+/** Proximity filter (#898): "within N jumps of me". Scopes both the table
+ *  and the map; hidden without an active character (no jump data to filter
+ *  by). "all" behaves exactly like the page did before this filter existed. */
+type FwProximityRadius = "3" | "5" | "10" | "all";
+const FW_PROXIMITY_OPTIONS: readonly {
+  key: FwProximityRadius;
+  label: string;
+}[] = [
+  { key: "3", label: "3j" },
+  { key: "5", label: "5j" },
+  { key: "10", label: "10j" },
+  { key: "all", label: "All" },
+];
+
 type FwSortKey =
   | "name"
   | "region"
@@ -151,6 +165,7 @@ type FwSortKey =
   | "contestedRank"
   | "vpPct"
   | "kills"
+  | "npcKills"
   | "jumps"
   | "hops";
 
@@ -163,6 +178,7 @@ const FW_SORT_KEYS: readonly FwSortKey[] = [
   "contestedRank",
   "vpPct",
   "kills",
+  "npcKills",
   "jumps",
   "hops",
 ];
@@ -257,6 +273,13 @@ const FW_COLUMNS: SortColumn<FwSortKey>[] = [
     label: "Kills 1h",
     numeric: true,
     description: "Ship kills in the last hour",
+  },
+  {
+    key: "npcKills",
+    label: "NPC Kills 1h",
+    numeric: true,
+    description:
+      "NPC (rat) kills in the last hour — high NPC kills with low ship kills suggests active plex farming",
   },
   {
     key: "jumps",
@@ -601,22 +624,12 @@ function Warzone({
     () => data.nodes.filter((n) => n.warzone === zone),
     [data.nodes, zone],
   );
-  const ids = useMemo(() => new Set(systems.map((s) => s.systemId)), [systems]);
 
-  // Warzone-list filter (persisted). Only scopes the per-system table; the
-  // control map keeps showing the whole warzone.
+  // Warzone-list filter (persisted): contested/uncontested/all.
   const [filter, setFilter] = usePersistentState<FwSystemFilter>(
     "fw.systemFilter",
     "all",
   );
-  const tableSystems = useMemo(() => {
-    if (filter === "all") return systems;
-    return systems.filter((s) =>
-      filter === "contested"
-        ? s.contested !== "uncontested"
-        : s.contested === "uncontested",
-    );
-  }, [systems, filter]);
 
   // Map size preset (#897), persisted; "fill" tracks the viewport via the
   // resize-aware hook, the fixed presets are plain pixel heights.
@@ -648,26 +661,55 @@ function Warzone({
     staleTime: FACTION_WARFARE_JUMP_DISTANCE_REFRESH_MS,
     refetchInterval: FACTION_WARFARE_JUMP_DISTANCE_REFRESH_MS,
   });
-  const dist = jumpResult.data?.jumps ?? {};
+  const dist = useMemo(() => jumpResult.data?.jumps ?? {}, [jumpResult.data]);
   const characterSystemId = jumpResult.data?.characterSystemId ?? null;
+
+  // Proximity filter (#898), persisted. "all" or no character → identical to
+  // the unfiltered set; scopes both the table and the map together.
+  const [radius, setRadius] = usePersistentState<FwProximityRadius>(
+    "fw.proximityRadius",
+    "all",
+  );
+  const visibleSystems = useMemo(() => {
+    if (radius === "all" || !hasCharacter) return systems;
+    const max = Number(radius);
+    return systems.filter((s) => {
+      const hops = dist[String(s.systemId)];
+      return hops != null && hops <= max;
+    });
+  }, [systems, dist, radius, hasCharacter]);
+
+  const ids = useMemo(
+    () => new Set(visibleSystems.map((s) => s.systemId)),
+    [visibleSystems],
+  );
+
+  const tableSystems = useMemo(() => {
+    if (filter === "all") return visibleSystems;
+    return visibleSystems.filter((s) =>
+      filter === "contested"
+        ? s.contested !== "uncontested"
+        : s.contested === "uncontested",
+    );
+  }, [visibleSystems, filter]);
 
   // Lay the tiles out as a top-down star map from real galactic X/Z coords
   // (x → horizontal, z → vertical, flipped so north is up), scaled to fit.
   const graphNodes: SystemGraphNode[] = useMemo(() => {
-    if (systems.length === 0) return [];
-    const xs = systems.map((s) => s.x);
-    const zs = systems.map((s) => s.z);
+    if (visibleSystems.length === 0) return [];
+    const xs = visibleSystems.map((s) => s.x);
+    const zs = visibleSystems.map((s) => s.z);
     const minX = Math.min(...xs);
     const maxX = Math.max(...xs);
     const minZ = Math.min(...zs);
     const maxZ = Math.max(...zs);
     const span = Math.max(maxX - minX, maxZ - minZ) || 1;
     const scale = 2800 / span;
-    const maxKills = Math.max(1, ...systems.map((s) => s.kills));
+    const maxKills = Math.max(1, ...visibleSystems.map((s) => s.kills));
     // Scale by real coords (x → horizontal, z → vertical, north up), then snap
     // to a grid so no two tiles overlap on first load.
     const placed = spreadNoOverlap(
-      systems.map((n) => ({
+      visibleSystems.map((n) => ({
         id: String(n.systemId),
         x: (n.x - minX) * scale,
         y: (maxZ - n.z) * scale,
@@ -675,7 +717,7 @@ function Warzone({
       168,
       66,
     );
-    return systems.map((n) => {
+    return visibleSystems.map((n) => {
       const p = placed.get(String(n.systemId)) ?? { x: 0, y: 0 };
       const hops = dist[String(n.systemId)];
       const isCurrent = n.systemId === characterSystemId;
@@ -688,7 +730,9 @@ function Warzone({
             ? ` · ${BATTLEFIELD_LABEL[n.battlefield] ?? n.battlefield}`
             : ""
         }${n.contested !== "uncontested" ? ` · ${n.contested}` : ""}${
-          n.kills > 0 ? ` · ${n.kills} kills` : ""
+          n.kills > 0 || n.npcKills > 0
+            ? ` · ${n.kills} kills${n.npcKills > 0 ? ` (${n.npcKills} npc)` : ""}`
+            : ""
         }${hops != null ? ` · ${isCurrent ? "here" : `${hops}j`}` : ""}`,
         accent: perspective
           ? RELATIONSHIP_HEX[
@@ -703,7 +747,7 @@ function Warzone({
         y: p.y,
       };
     });
-  }, [systems, dist, characterSystemId, perspective]);
+  }, [visibleSystems, dist, characterSystemId, perspective]);
   const graphEdges: SystemGraphEdge[] = data.edges
     .filter(([a, b]) => ids.has(a) && ids.has(b))
     .map(([a, b]) => ({
@@ -715,9 +759,9 @@ function Warzone({
   // Colour legend for the factions present in this warzone.
   const factions = useMemo(() => {
     const m = new Map<number, string>();
-    for (const s of systems) m.set(s.occupierId, s.occupier);
+    for (const s of visibleSystems) m.set(s.occupierId, s.occupier);
     return [...m.entries()];
-  }, [systems]);
+  }, [visibleSystems]);
 
   return (
     <div className="mt-4">
@@ -738,8 +782,28 @@ function Warzone({
             </button>
           ))}
         </div>
+        {hasCharacter && (
+          <>
+            <span className="text-xs text-zinc-500">Within</span>
+            <div className="flex overflow-hidden rounded border border-zinc-700 text-sm">
+              {FW_PROXIMITY_OPTIONS.map((r) => (
+                <button
+                  key={r.key}
+                  onClick={() => setRadius(r.key)}
+                  className={`px-3 py-1 ${
+                    radius === r.key
+                      ? "bg-zinc-700 text-zinc-100"
+                      : "text-zinc-400 hover:bg-zinc-800"
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
         <span className="text-xs text-zinc-600">
-          {tableSystems.length} of {systems.length} systems
+          {tableSystems.length} of {visibleSystems.length} systems
         </span>
       </div>
       <SystemTable
@@ -750,7 +814,7 @@ function Warzone({
       />
 
       <div className="mt-4 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-zinc-400">
-        <span>{systems.length} systems</span>
+        <span>{visibleSystems.length} systems</span>
         {perspective
           ? (["friendly", "hostile", "cartel"] as const).flatMap((rel) =>
               factions
@@ -964,6 +1028,9 @@ function SystemTable({
                 }`}
               >
                 {s.kills > 0 ? formatInt(s.kills) : "—"}
+              </td>
+              <td className="px-3 py-1.5 text-right tabular-nums text-zinc-500">
+                {s.npcKills > 0 ? formatInt(s.npcKills) : "—"}
               </td>
               <td className="px-3 py-1.5 text-right tabular-nums text-zinc-400">
                 {s.jumps > 0 ? formatInt(s.jumps) : "—"}
