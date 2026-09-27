@@ -41,6 +41,7 @@ import {
   type MilitiaFactionId,
   type Perspective,
 } from "./factionPerspective";
+import { trendTier, trendTooltip, TREND_ARROW } from "./vpTrend";
 
 /** The militia picker's selection: Observer (neutral, today's view) or one
  *  of the four militias. */
@@ -135,6 +136,7 @@ type FwSortKey =
   | "battlefieldRank"
   | "contestedRank"
   | "vpPct"
+  | "vpVelocity"
   | "kills"
   | "npcKills"
   | "jumps"
@@ -148,6 +150,7 @@ const FW_SORT_KEYS: readonly FwSortKey[] = [
   "battlefieldRank",
   "contestedRank",
   "vpPct",
+  "vpVelocity",
   "kills",
   "npcKills",
   "jumps",
@@ -238,6 +241,13 @@ const FW_COLUMNS: SortColumn<FwSortKey>[] = [
     label: "Capture",
     numeric: true,
     description: "Victory-point capture progress (% toward flip)",
+  },
+  {
+    key: "vpVelocity",
+    label: "Trend",
+    numeric: false,
+    description:
+      "Capture-progress velocity over the last ~30 min: ↑↑ fast gain, ↑ gain, → stable, ↓ falling. Blank until enough history exists.",
   },
   {
     key: "kills",
@@ -647,7 +657,10 @@ function Warzone({
           n.battlefield !== "rearguard"
             ? ` · ${BATTLEFIELD_LABEL[n.battlefield] ?? n.battlefield}`
             : ""
-        }${n.contested !== "uncontested" ? ` · ${n.contested}` : ""}${
+        }${n.contested !== "uncontested" ? ` · ${n.contested}` : ""}${(() => {
+          const tier = trendTier(n.vpVelocity);
+          return tier ? ` ${TREND_ARROW[tier]}` : "";
+        })()}${
           n.kills > 0 || n.npcKills > 0
             ? ` · ${n.kills} kills${n.npcKills > 0 ? ` (${n.npcKills} npc)` : ""}`
             : ""
@@ -815,7 +828,7 @@ function SystemTable({
       };
     });
     return sortRows(augmented, sortKey, sortDir, {
-      nullsLast: sortKey === "hops",
+      nullsLast: sortKey === "hops" || sortKey === "vpVelocity",
     });
   }, [systems, dist, sortKey, sortDir, perspective]);
 
@@ -898,6 +911,15 @@ function SystemTable({
                 {s.contested === "uncontested"
                   ? "—"
                   : `${Math.round(s.vpPct * 100)}%`}
+              </td>
+              <td
+                className="px-3 py-1.5 text-center tabular-nums text-zinc-400"
+                title={trendTooltip(s.vpPct, s.vpVelocity)}
+              >
+                {(() => {
+                  const tier = trendTier(s.vpVelocity);
+                  return tier ? TREND_ARROW[tier] : "—";
+                })()}
               </td>
               <td
                 className={`px-3 py-1.5 text-right tabular-nums ${
