@@ -9,6 +9,7 @@ import {
   errorMessage,
   fwSystems,
   intelFwEnlistment,
+  intelFwHotspots,
   intelFwJumps,
   intelFwPersonalStats,
   intelFwStats,
@@ -63,6 +64,13 @@ import {
   MILITIA_LP_CORP_ID,
   plexingIskPerHour,
 } from "./lpEstimate";
+import {
+  HEAT_LAYER_OPTIONS,
+  heatBg,
+  heatCount,
+  rankHotspots,
+  type HeatLayer,
+} from "./hotspots";
 
 /** The militia picker's selection: Observer (neutral, today's view) or one
  *  of the four militias. */
@@ -807,6 +815,42 @@ function Warzone({
         ? { key: "farmScore", dir: "desc" }
         : undefined;
 
+  // Kill hotspots (#905): zKillboard faction-scoped feeds bucketed into
+  // friendly/enemy/cartel per system, over the last ~6h — a heat layer
+  // toggle on the map, mutually exclusive with the default kill-heat tint.
+  // Requires a militia selection (Observer has no "friendly"/"enemy").
+  const [heatLayer, setHeatLayer] = usePersistentState<HeatLayer>(
+    "fw.heatLayer",
+    "off",
+  );
+  const hotspots = useQuery({
+    queryKey: [
+      "intel",
+      "fw-hotspots",
+      perspective?.myFaction,
+      perspective?.enemyFaction,
+    ],
+    queryFn: () =>
+      intelFwHotspots(perspective!.myFaction, perspective!.enemyFaction),
+    enabled: !!perspective && heatLayer !== "off",
+    staleTime: 5 * 60_000,
+  });
+  const hotspotCounts = useMemo(
+    () => new Map(hotspots.data?.systems.map((c) => [c.systemId, c]) ?? []),
+    [hotspots.data],
+  );
+  const maxHeatCount = useMemo(() => {
+    if (heatLayer === "off") return 1;
+    return Math.max(
+      1,
+      ...[...hotspotCounts.values()].map((c) => heatCount(c, heatLayer)),
+    );
+  }, [hotspotCounts, heatLayer]);
+  const hotspotRows = useMemo(
+    () => rankHotspots(playstyleSystems, [...hotspotCounts.values()], dist, 8),
+    [playstyleSystems, hotspotCounts, dist],
+  );
+
   const ids = useMemo(
     () => new Set(playstyleSystems.map((s) => s.systemId)),
     [playstyleSystems],
@@ -899,7 +943,23 @@ function Warzone({
               ]
             : (FACTION_HEX[n.occupierId] ?? "#a1a1aa"),
         ring: dimmed ? undefined : CONTEST_RING[n.contested],
-        bg: dimmed ? undefined : tileBg(n.contested, n.kills, maxKills),
+        bg: dimmed
+          ? undefined
+          : heatLayer !== "off"
+            ? heatBg(
+                CONTEST_RGB[n.contested] ?? BASE_RGB,
+                heatCount(
+                  hotspotCounts.get(n.systemId) ?? {
+                    friendlyLosses: 0,
+                    enemyLosses: 0,
+                    cartelActivity: 0,
+                  },
+                  heatLayer,
+                ),
+                maxHeatCount,
+                heatLayer,
+              )
+            : tileBg(n.contested, n.kills, maxKills),
         current: isCurrent,
         group: n.region,
         x: p.x,
@@ -913,6 +973,9 @@ function Warzone({
     perspective,
     playstyle,
     radius,
+    heatLayer,
+    hotspotCounts,
+    maxHeatCount,
   ]);
   const graphEdges: SystemGraphEdge[] = data.edges
     .filter(([a, b]) => ids.has(a) && ids.has(b))
@@ -949,6 +1012,73 @@ function Warzone({
           ))}
         </div>
       </div>
+      {perspective && (
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="text-xs text-zinc-500">Heat</span>
+          <div className="flex overflow-hidden rounded border border-zinc-700 text-sm">
+            {HEAT_LAYER_OPTIONS.map((h) => (
+              <button
+                key={h.key}
+                onClick={() => setHeatLayer(h.key)}
+                className={`px-3 py-1 ${
+                  heatLayer === h.key
+                    ? "bg-zinc-700 text-zinc-100"
+                    : "text-zinc-400 hover:bg-zinc-800"
+                }`}
+              >
+                {h.label}
+              </button>
+            ))}
+          </div>
+          {hotspots.isLoading && heatLayer !== "off" && (
+            <span className="text-xs text-zinc-600">Loading…</span>
+          )}
+        </div>
+      )}
+      {heatLayer !== "off" && hotspotRows.length > 0 && (
+        <div className="mb-4 rounded border border-zinc-800 bg-zinc-900/50 p-3 text-xs">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <span className="font-medium text-zinc-300">
+              Hottest systems (6h)
+            </span>
+            <span
+              className="text-zinc-600"
+              title="Insurgency corruption/suppression stage has no public ESI endpoint — only cartel kill activity can be shown here, not the corruption bar."
+            >
+              cartel activity shown, not corruption stage
+            </span>
+          </div>
+          <ul className="space-y-1">
+            {hotspotRows.map((r) => (
+              <li
+                key={r.systemId}
+                className="flex items-center justify-between gap-2"
+              >
+                <a
+                  href={`https://zkillboard.com/system/${r.systemId}/`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-w-0 truncate text-zinc-300 hover:text-indigo-300"
+                >
+                  {r.systemName}
+                </a>
+                <span className="flex shrink-0 items-center gap-3 tabular-nums text-zinc-500">
+                  {r.hops != null && <span>{r.hops}j</span>}
+                  <span className="text-rose-400" title="Our losses">
+                    {r.friendlyLosses}
+                  </span>
+                  <span className="text-emerald-400" title="Their losses">
+                    {r.enemyLosses}
+                  </span>
+                  <span className="text-purple-400" title="Cartel activity">
+                    {r.cartelActivity}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {playstyle === "plexing" && perspective && (
         <PlexingIncomePanel militia={perspective.myFaction} />
       )}

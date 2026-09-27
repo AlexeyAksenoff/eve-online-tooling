@@ -634,6 +634,61 @@ describe("FW detailed map tiles (#902)", () => {
   });
 });
 
+describe("FW kill hotspots (#905)", () => {
+  it("hides the heat toggle in Observer mode", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Heat")).not.toBeInTheDocument();
+  });
+
+  it("queries hotspots for the selected militia pair and shows the hottest-systems strip", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      auth_active_character: () => 1,
+      intel_fw_enlistment: () => null,
+      intel_fw_jumps: () => ({ characterSystemId: 1, jumps: { "2": 3 } }),
+      intel_fw_hotspots: () => ({
+        systems: [
+          { systemId: 2, friendlyLosses: 5, enemyLosses: 1, cartelActivity: 0 },
+        ],
+      }),
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Amarr Empire" }));
+    expect(screen.queryByText("Hottest systems (6h)")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Our losses" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("intel_fw_hotspots", {
+        myFaction: 500003,
+        enemyFaction: 500002,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByText("Hottest systems (6h)")).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByRole("link", { name: "FightVille" }),
+    ).toBeInTheDocument();
+
+    // Back to "Off" hides the strip again.
+    fireEvent.click(screen.getByRole("button", { name: "Off" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Hottest systems (6h)"),
+      ).not.toBeInTheDocument(),
+    );
+  });
+});
+
 describe("FW personal stats card", () => {
   it("is hidden in Observer mode even with a character logged in", async () => {
     mockInvoke({

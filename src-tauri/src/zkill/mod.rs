@@ -202,6 +202,26 @@ pub async fn kills_for_system(system_id: i64) -> Vec<ZkillLossRef> {
     .await
 }
 
+/// Recent kills where an attacker belongs to `faction_id`, newest first —
+/// that faction's kills (#905: e.g. a warzone militia's or NPC cartel's kill
+/// activity).
+pub async fn kills_for_faction(faction_id: i64) -> Vec<ZkillLossRef> {
+    fetch_losses(format!(
+        "https://zkillboard.com/api/kills/factionID/{faction_id}/"
+    ))
+    .await
+}
+
+/// Recent losses where the victim belongs to `faction_id`, newest first —
+/// that faction's losses (#905: e.g. a warzone militia's deaths, or a pilot
+/// killing an NPC cartel ship).
+pub async fn losses_for_faction(faction_id: i64) -> Vec<ZkillLossRef> {
+    fetch_losses(format!(
+        "https://zkillboard.com/api/losses/factionID/{faction_id}/"
+    ))
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

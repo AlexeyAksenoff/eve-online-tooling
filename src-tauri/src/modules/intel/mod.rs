@@ -3,3 +3,4 @@
 //! aggregates, so this module works before (or without) SSO.
 
 pub mod commands;
+pub mod hotspots;

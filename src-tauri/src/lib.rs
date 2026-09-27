@@ -365,6 +365,7 @@ pub fn run() {
             modules::intel::commands::intel_fw_jumps,
             modules::intel::commands::intel_fw_enlistment,
             modules::intel::commands::intel_fw_personal_stats,
+            modules::intel::hotspots::intel_fw_hotspots,
             modules::notifications::commands::notifications_list,
             modules::notifications::commands::notifications_dismiss,
             modules::notifications::commands::notifications_reset,

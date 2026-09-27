@@ -140,3 +140,29 @@ export interface FwPersonalStatsResult {
 export function intelFwPersonalStats(): Promise<FwPersonalStatsResult> {
   return invoke<FwPersonalStatsResult>("intel_fw_personal_stats");
 }
+
+/** Per-system kill counts for one bucket (#905): how many kills in the
+ *  last ~6h a system contributed to friendly losses, enemy losses, or NPC
+ *  cartel activity — from zKillboard's faction-scoped feeds, not ESI's
+ *  neutral-gank-inclusive counter. */
+export interface HotspotSystemCounts {
+  systemId: number;
+  friendlyLosses: number;
+  enemyLosses: number;
+  cartelActivity: number;
+}
+
+export interface HotspotsResult {
+  systems: HotspotSystemCounts[];
+}
+
+/** FW kill hotspots for the given militia pair (#905), cached ~5 min. */
+export function intelFwHotspots(
+  myFaction: number,
+  enemyFaction: number,
+): Promise<HotspotsResult> {
+  return invoke<HotspotsResult>("intel_fw_hotspots", {
+    myFaction,
+    enemyFaction,
+  });
+}
