@@ -16,6 +16,7 @@ import { resolveStartModule } from "./lib/startModule";
 import { ScriptsRunnerProvider } from "./modules/scripts/runner";
 import { InfoAlertsProvider } from "./modules/info/InfoAlertsProvider";
 import { FightOverlayProvider } from "./modules/pvp/FightOverlayProvider";
+import { FwHomeDefenseProvider } from "./modules/faction-warfare/FwHomeDefenseProvider";
 import "./index.css";
 
 // Sentry: DSN is baked in at build time via VITE_SENTRY_DSN; absent = disabled.
@@ -65,7 +66,9 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <ScriptsRunnerProvider>
         <InfoAlertsProvider>
           <FightOverlayProvider>
-            <RouterProvider router={router} />
+            <FwHomeDefenseProvider>
+              <RouterProvider router={router} />
+            </FwHomeDefenseProvider>
           </FightOverlayProvider>
         </InfoAlertsProvider>
       </ScriptsRunnerProvider>
