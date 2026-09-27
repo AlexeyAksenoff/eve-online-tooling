@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Navigation } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -126,6 +126,21 @@ const FW_FILTERS: readonly { key: FwSystemFilter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "contested", label: "Contested" },
   { key: "uncontested", label: "Uncontested" },
+];
+
+/** Map height presets (#897). "fill" tracks the remaining viewport height
+ *  via {@link useFillHeight} instead of a fixed pixel value. */
+type FwMapSize = "s" | "m" | "l" | "fill";
+const MAP_SIZE_PX: Record<Exclude<FwMapSize, "fill">, number> = {
+  s: 320,
+  m: 480,
+  l: 720,
+};
+const FW_MAP_SIZES: readonly { key: FwMapSize; label: string }[] = [
+  { key: "s", label: "S" },
+  { key: "m", label: "M" },
+  { key: "l", label: "L" },
+  { key: "fill", label: "Fill" },
 ];
 
 /** Proximity filter (#898): "within N jumps of me". Scopes both the table
@@ -353,6 +368,31 @@ function spreadNoOverlap(
     out.set(p.id, { x: cx * cellW, y: cy * cellH });
   }
   return out;
+}
+
+/**
+ * "Fill" map size (#897): grows the map to the remaining viewport height
+ * below its own top edge, tracking window resizes so it never needs a page
+ * reload to re-fit. Inactive presets skip the resize listener entirely.
+ */
+function useFillHeight(
+  active: boolean,
+  minHeight: number,
+): [RefObject<HTMLDivElement | null>, number] {
+  const ref = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState(minHeight);
+  useEffect(() => {
+    if (!active) return;
+    const compute = () => {
+      const top = ref.current?.getBoundingClientRect().top ?? 0;
+      // 16px breathing room below the map so it doesn't touch the viewport edge.
+      setHeight(Math.max(minHeight, window.innerHeight - top - 16));
+    };
+    compute();
+    window.addEventListener("resize", compute);
+    return () => window.removeEventListener("resize", compute);
+  }, [active, minHeight]);
+  return [ref, height];
 }
 
 // Faction-warfare warzone view: pick a warzone, see the control map (systems
@@ -601,6 +641,15 @@ function Warzone({
     "all",
   );
 
+  // Map size preset (#897), persisted; "fill" tracks the viewport via the
+  // resize-aware hook, the fixed presets are plain pixel heights.
+  const [mapSize, setMapSize] = usePersistentState<FwMapSize>(
+    "fw.mapSize",
+    "m",
+  );
+  const [fillRef, fillHeight] = useFillHeight(mapSize === "fill", 320);
+  const mapHeight = mapSize === "fill" ? fillHeight : MAP_SIZE_PX[mapSize];
+
   // Auth: needed for jump distances + waypoint button in the table.
   const characters = useQuery({
     queryKey: ["auth", "characters"],
@@ -823,13 +872,34 @@ function Warzone({
           more kills
         </span>
         <span className="text-zinc-600">· star map — drag to arrange</span>
+        <span className="ml-auto flex items-center gap-1.5">
+          <span className="text-zinc-600">Size</span>
+          <span className="flex overflow-hidden rounded border border-zinc-700">
+            {FW_MAP_SIZES.map((s) => (
+              <button
+                key={s.key}
+                onClick={() => setMapSize(s.key)}
+                className={`px-2 py-0.5 ${
+                  mapSize === s.key
+                    ? "bg-zinc-700 text-zinc-100"
+                    : "text-zinc-400 hover:bg-zinc-800"
+                }`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </span>
+        </span>
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-zinc-800">
+      <div
+        ref={fillRef}
+        className="overflow-hidden rounded-lg border border-zinc-800"
+      >
         <SystemGraph
           nodes={graphNodes}
           edges={graphEdges}
-          height={480}
+          height={mapHeight}
           storageKey={`fw-map3-${zone}`}
         />
       </div>
