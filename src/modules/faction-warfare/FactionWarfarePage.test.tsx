@@ -10,6 +10,7 @@ function node(
   id: number,
   occupierId = 500003,
   occupier = "Amarr",
+  battlefield = "rearguard",
 ): FwSystemNode {
   return {
     systemId: id,
@@ -25,6 +26,7 @@ function node(
     vpPct: contested === "uncontested" ? 0 : 0.5,
     kills: 0,
     jumps: 0,
+    battlefield,
     x: id * 1e15,
     z: id * 1e15,
   };
@@ -196,5 +198,28 @@ describe("FW militia perspective", () => {
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
     expect(inTable().queryByText("defend")).not.toBeInTheDocument();
+  });
+});
+
+describe("FW battlefield classification", () => {
+  it("shows the derived battlefield chip per system, in Observer mode too", async () => {
+    const battlefieldNodes = [
+      node("EdgeSystem", "contested", 20, 500003, "Amarr", "frontline"),
+      node("StagingSystem", "uncontested", 21, 500003, "Amarr", "commandops"),
+      node("QuietBackwater", "uncontested", 22, 500003, "Amarr", "rearguard"),
+    ];
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: battlefieldNodes, edges: [] }),
+      auth_characters: () => [],
+      auth_active_character: () => null,
+    });
+    renderWithQuery(<FactionWarfarePage />);
+    await waitFor(() =>
+      expect(inTable().getByText("EdgeSystem")).toBeInTheDocument(),
+    );
+    expect(inTable().getByText("Frontline")).toBeInTheDocument();
+    expect(inTable().getByText("Command Ops")).toBeInTheDocument();
+    expect(inTable().getByText("Rearguard")).toBeInTheDocument();
   });
 });

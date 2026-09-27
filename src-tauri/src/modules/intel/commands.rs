@@ -257,6 +257,9 @@ pub struct FwSystemNode {
     pub kills: i64,
     /// Jumps in the last hour (traffic proxy — ESI has no live player count).
     pub jumps: i64,
+    /// "frontline" | "commandops" | "rearguard" — derived from occupancy +
+    /// stargate adjacency (#895); ESI exposes no battlefield classification.
+    pub battlefield: String,
     /// Galactic map-plane coordinates (seed the star-map layout).
     pub x: f64,
     pub z: f64,
@@ -268,6 +271,69 @@ pub struct FwSystemNode {
 pub struct FwMap {
     pub nodes: Vec<FwSystemNode>,
     pub edges: Vec<[i64; 2]>,
+}
+
+/// Battlefield classification (#895): ESI exposes no such field, but it's
+/// fully derivable from occupancy + stargate adjacency, scoped per warzone
+/// so a (geographically rare, but not filtered upstream) cross-warzone
+/// stargate edge can never seed a frontline:
+///
+/// - **frontline**: has a same-warzone neighbour occupied by a different
+///   faction (i.e. sits on the current contact line).
+/// - **commandops**: not itself a frontline, but adjacent to a frontline
+///   system under the *same* occupier (a staging system just behind the
+///   line).
+/// - **rearguard**: everything else.
+///
+/// Pure and warzone-list-sized (a few hundred systems, small constant-factor
+/// adjacency scans) — cheap enough to recompute on every fetch rather than
+/// cache separately, so it can never go stale relative to the occupancy data
+/// it's derived from.
+fn classify_battlefield(nodes: &[FwSystemNode], edges: &[[i64; 2]]) -> HashMap<i64, &'static str> {
+    let info: HashMap<i64, (&str, i64)> = nodes
+        .iter()
+        .map(|n| (n.system_id, (n.warzone.as_str(), n.occupier_id)))
+        .collect();
+    let warzone_of = |id: i64| info.get(&id).map(|&(wz, _)| wz);
+    let occupier_of = |id: i64| info.get(&id).map(|&(_, occ)| occ);
+
+    let mut adj: HashMap<i64, Vec<i64>> = HashMap::new();
+    for &[a, b] in edges {
+        let same_warzone = match (warzone_of(a), warzone_of(b)) {
+            (Some(wa), Some(wb)) => !wa.is_empty() && wa == wb,
+            _ => false,
+        };
+        if same_warzone {
+            adj.entry(a).or_default().push(b);
+            adj.entry(b).or_default().push(a);
+        }
+    }
+
+    let is_frontline = |id: i64| -> bool {
+        let Some(occ) = occupier_of(id) else {
+            return false;
+        };
+        adj.get(&id)
+            .is_some_and(|ns| ns.iter().any(|&n| occupier_of(n) != Some(occ)))
+    };
+
+    nodes
+        .iter()
+        .map(|n| {
+            let id = n.system_id;
+            let label = if is_frontline(id) {
+                "frontline"
+            } else if adj.get(&id).is_some_and(|ns| {
+                ns.iter()
+                    .any(|&nb| occupier_of(nb) == occupier_of(id) && is_frontline(nb))
+            }) {
+                "commandops"
+            } else {
+                "rearguard"
+            };
+            (id, label)
+        })
+        .collect()
 }
 
 /// Every faction-warfare system with its owner/occupier, contested state and
@@ -358,9 +424,20 @@ pub async fn intel_fw_systems(
                 jumps: jump_map.get(&s.solar_system_id).copied().unwrap_or(0),
                 x,
                 z,
+                battlefield: String::new(), // filled in below by classify_battlefield
             }
         })
         .collect();
+    // Derived, not from ESI (#895) — recomputed every fetch from the fresh
+    // occupancy graph, so it never needs its own cache invalidation.
+    let battlefield_by_id = classify_battlefield(&nodes, &edges);
+    for n in &mut nodes {
+        n.battlefield = battlefield_by_id
+            .get(&n.system_id)
+            .copied()
+            .unwrap_or("rearguard")
+            .to_string();
+    }
     // Most-contested first in the table (highest capture progress on top).
     nodes.sort_by(|a, b| {
         b.vp_pct
@@ -466,7 +543,28 @@ pub async fn intel_fw_enlistment(
 
 #[cfg(test)]
 mod tests {
-    use super::{faction_name, warzone};
+    use super::{classify_battlefield, faction_name, warzone, FwSystemNode};
+
+    fn node(id: i64, wz: &str, occupier_id: i64) -> FwSystemNode {
+        FwSystemNode {
+            system_id: id,
+            name: format!("Sys{id}"),
+            region: "Region".into(),
+            warzone: wz.to_string(),
+            security: 0.3,
+            owner: String::new(),
+            occupier: String::new(),
+            owner_id: occupier_id,
+            occupier_id,
+            contested: "contested".into(),
+            vp_pct: 0.0,
+            kills: 0,
+            jumps: 0,
+            x: 0.0,
+            z: 0.0,
+            battlefield: String::new(),
+        }
+    }
 
     #[test]
     fn faction_name_maps_the_four_militias() {
@@ -482,5 +580,82 @@ mod tests {
         assert_eq!(warzone(500003), "Amarr–Minmatar"); // Amarr Empire
         assert_eq!(warzone(500002), "Amarr–Minmatar"); // Minmatar Republic
         assert_eq!(warzone(99), ""); // not a militia
+    }
+
+    #[test]
+    fn frontline_needs_an_enemy_neighbour_in_the_same_warzone() {
+        let nodes = vec![
+            node(1, "Amarr–Minmatar", 500003),
+            node(2, "Amarr–Minmatar", 500002),
+        ];
+        let out = classify_battlefield(&nodes, &[[1, 2]]);
+        assert_eq!(out[&1], "frontline");
+        assert_eq!(out[&2], "frontline");
+    }
+
+    #[test]
+    fn commandops_sits_behind_a_friendly_frontline() {
+        // 3 shares 1's occupier and is adjacent to frontline system 1.
+        let nodes = vec![
+            node(1, "Amarr–Minmatar", 500003),
+            node(2, "Amarr–Minmatar", 500002),
+            node(3, "Amarr–Minmatar", 500003),
+        ];
+        let out = classify_battlefield(&nodes, &[[1, 2], [1, 3]]);
+        assert_eq!(out[&1], "frontline");
+        assert_eq!(out[&3], "commandops");
+    }
+
+    #[test]
+    fn rearguard_is_neither_frontline_nor_adjacent_to_one() {
+        // Chain: 1–2 frontline; 3 (behind 1) commandops; 4 (behind 3) rearguard.
+        let nodes = vec![
+            node(1, "Amarr–Minmatar", 500003),
+            node(2, "Amarr–Minmatar", 500002),
+            node(3, "Amarr–Minmatar", 500003),
+            node(4, "Amarr–Minmatar", 500003),
+        ];
+        let out = classify_battlefield(&nodes, &[[1, 2], [1, 3], [3, 4]]);
+        assert_eq!(out[&4], "rearguard");
+    }
+
+    #[test]
+    fn cross_warzone_edges_never_seed_a_frontline() {
+        // Different occupiers, but different warzones — must stay rearguard.
+        let nodes = vec![
+            node(1, "Amarr–Minmatar", 500003),
+            node(2, "Caldari–Gallente", 500001),
+        ];
+        let out = classify_battlefield(&nodes, &[[1, 2]]);
+        assert_eq!(out[&1], "rearguard");
+        assert_eq!(out[&2], "rearguard");
+    }
+
+    #[test]
+    fn commandops_requires_the_same_occupier_as_the_frontline_neighbour() {
+        // 1–2 frontline (opposite occupiers). 3 shares 2's occupier and is
+        // adjacent to 2 (itself a frontline) → commandops via 2, not via 1.
+        let nodes = vec![
+            node(1, "Amarr–Minmatar", 500003),
+            node(2, "Amarr–Minmatar", 500002),
+            node(3, "Amarr–Minmatar", 500002),
+        ];
+        let out = classify_battlefield(&nodes, &[[1, 2], [2, 3]]);
+        assert_eq!(out[&2], "frontline");
+        assert_eq!(out[&3], "commandops");
+    }
+
+    #[test]
+    fn both_warzones_classify_independently() {
+        let nodes = vec![
+            node(1, "Amarr–Minmatar", 500003),
+            node(2, "Amarr–Minmatar", 500002),
+            node(10, "Caldari–Gallente", 500001),
+            node(11, "Caldari–Gallente", 500004),
+        ];
+        let out = classify_battlefield(&nodes, &[[1, 2], [10, 11]]);
+        assert_eq!(out[&1], "frontline");
+        assert_eq!(out[&10], "frontline");
+        assert_eq!(out[&11], "frontline");
     }
 }
