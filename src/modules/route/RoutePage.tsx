@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   errorMessage,
@@ -107,6 +108,17 @@ function Workbench() {
     setCentre(m);
     setMode("neighbouring");
   }
+
+  // Deep link from other modules (e.g. FW's "route to nearest frontline",
+  // #908): a system handed via router state auto-focuses the neighbourhood
+  // on arrival, same pattern as Local Intel → PVP's pilotName hand-off.
+  const location = useLocation();
+  const destination = (location.state as { destination?: SystemMatch } | null)
+    ?.destination;
+  useEffect(() => {
+    if (destination) focusSystem(destination);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally run once on mount only
 
   // Applies a fresh location fetch: records the breadcrumb and re-centres the
   // neighbourhood on the current system. Shared by the manual "focus on me"
