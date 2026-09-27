@@ -112,3 +112,31 @@ export function intelFwJumps(systemIds: number[]): Promise<FwJumpResult> {
 export function intelFwEnlistment(): Promise<number | null> {
   return invoke<number | null>("intel_fw_enlistment");
 }
+
+/** The active character's own FW record: militia, rank, kills, VP, and
+ * enlistment date, for the perspective view's personal stats card. */
+export interface FwPersonalStats {
+  factionId: number;
+  rankName: string;
+  killsYesterday: number;
+  killsTotal: number;
+  vpYesterday: number;
+  vpTotal: number;
+  /** RFC-3339, or null if ESI omitted it. */
+  enlistedOn: string | null;
+}
+
+export interface FwPersonalStatsResult {
+  /** Null when unenlisted, unauthenticated, or a genuine ESI failure. */
+  stats: FwPersonalStats | null;
+  /** True specifically for a 403 (missing `esi-characters.read_fw_stats.v1`
+   * — granted before this scope was added, needs a re-login). Distinct from
+   * `stats: null` so the UI can show a "re-login to enable" hint instead of
+   * silently hiding the card like the unenlisted case does. */
+  missingScope: boolean;
+}
+
+/** The active character's personal FW record, cached ~10 min. */
+export function intelFwPersonalStats(): Promise<FwPersonalStatsResult> {
+  return invoke<FwPersonalStatsResult>("intel_fw_personal_stats");
+}
