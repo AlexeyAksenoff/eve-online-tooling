@@ -12,12 +12,18 @@ import {
   intelFwJumps,
   intelFwPersonalStats,
   intelFwStats,
+  lpOffers,
   setWaypoint,
   type FwJumpResult,
   type FwMap,
   type FwSystemNode,
 } from "../../lib/api";
-import { formatEveDateTime, formatInt, sortRows } from "../../lib/format";
+import {
+  formatEveDateTime,
+  formatInt,
+  formatIsk,
+  sortRows,
+} from "../../lib/format";
 import {
   SystemGraph,
   type SystemGraphNode,
@@ -50,6 +56,13 @@ import {
   PLAYSTYLE_OPTIONS,
   type Playstyle,
 } from "./playstyle";
+import {
+  ASSUMED_BASE_LP_PER_CAPTURE,
+  ASSUMED_CAPTURE_MINUTES,
+  BATTLEFIELD_LP_MULTIPLIER,
+  MILITIA_LP_CORP_ID,
+  plexingIskPerHour,
+} from "./lpEstimate";
 
 /** The militia picker's selection: Observer (neutral, today's view) or one
  *  of the four militias. */
@@ -907,6 +920,9 @@ function Warzone({
           ))}
         </div>
       </div>
+      {playstyle === "plexing" && perspective && (
+        <PlexingIncomePanel militia={perspective.myFaction} />
+      )}
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="text-xs text-zinc-500">Show</span>
         <div className="flex overflow-hidden rounded border border-zinc-700 text-sm">
@@ -1083,6 +1099,59 @@ function Warzone({
           height={mapHeight}
           storageKey={`fw-map3-${zone}`}
         />
+      </div>
+    </div>
+  );
+}
+
+/** Plexing-mode ISK/h estimate (#906). Reuses the lp-store module's
+ *  existing `lpOffers` valuation (best ISK/LP at the militia's home LP
+ *  store) — no pricing logic duplicated here. Recomputes whenever the
+ *  selected militia (and therefore its LP store) changes, since `corpId`
+ *  is part of the query key. Fails quiet: this is a supplementary estimate,
+ *  not core functionality, so a stale price fetch or missing LP store
+ *  offer just hides the panel rather than blocking the page. */
+function PlexingIncomePanel({ militia }: { militia: MilitiaFactionId }) {
+  const corpId = MILITIA_LP_CORP_ID[militia];
+  const { data, isLoading } = useQuery({
+    queryKey: ["lp-offers", corpId],
+    queryFn: () => lpOffers({ corporationId: corpId }),
+    staleTime: 10 * 60 * 1000,
+  });
+  const best = data?.rows[0];
+
+  if (isLoading) {
+    return (
+      <div className="mb-4 text-xs text-zinc-500">
+        Loading plexing income estimate…
+      </div>
+    );
+  }
+  if (!best) return null;
+
+  return (
+    <div className="mb-4 rounded border border-zinc-800 bg-zinc-900/50 p-3 text-xs text-zinc-400">
+      <div className="mb-1 font-medium text-zinc-300">
+        Plexing income estimate
+      </div>
+      <div className="flex flex-wrap gap-x-6 gap-y-1">
+        {(
+          Object.keys(
+            BATTLEFIELD_LP_MULTIPLIER,
+          ) as (keyof typeof BATTLEFIELD_LP_MULTIPLIER)[]
+        ).map((bf) => (
+          <span key={bf}>
+            {BATTLEFIELD_LABEL[bf] ?? bf}: ≈{" "}
+            <span className="text-emerald-300">
+              {formatIsk(plexingIskPerHour(bf, best.iskPerLp))}/h
+            </span>
+          </span>
+        ))}
+      </div>
+      <div className="mt-1 text-zinc-600">
+        Assumes {formatInt(ASSUMED_BASE_LP_PER_CAPTURE)} LP per a{" "}
+        {ASSUMED_CAPTURE_MINUTES}-minute Medium ADV-1 capture, best conversion:{" "}
+        {best.name} at {best.iskPerLp.toFixed(0)} ISK/LP.
       </div>
     </div>
   );
