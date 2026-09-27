@@ -192,6 +192,89 @@ describe("FW playstyle presets (#904)", () => {
   });
 });
 
+describe("FW plexing income estimate (#906)", () => {
+  beforeEach(() => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
+      auth_characters: () => [],
+      auth_active_character: () => null,
+      lp_offers: () => ({
+        fetchedAt: 0,
+        rows: [
+          {
+            name: "Caldari Navy Hookbill",
+            quantity: 1,
+            lpCost: 5000,
+            iskCost: 0,
+            sellValue: 6_000_000,
+            cost: 5_500_000,
+            profit: 500_000,
+            iskPerLp: 100,
+          },
+        ],
+      }),
+    });
+  });
+
+  it("is hidden outside Plexing mode and in Observer mode", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByText("Plexing income estimate"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Plexing" }));
+    // Still Observer — no militia, no LP store to price against.
+    expect(
+      screen.queryByText("Plexing income estimate"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows ISK/h per battlefield class once a militia is selected in Plexing mode", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Amarr Empire" }));
+    fireEvent.click(screen.getByRole("button", { name: "Plexing" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Plexing income estimate")).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Frontline:/)).toBeInTheDocument();
+    expect(screen.getByText(/Command Ops:/)).toBeInTheDocument();
+    expect(screen.getByText(/Rearguard:/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Caldari Navy Hookbill at 100 ISK\/LP/),
+    ).toBeInTheDocument();
+  });
+
+  it("recomputes against the new militia's LP store when the selection changes", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Amarr Empire" }));
+    fireEvent.click(screen.getByRole("button", { name: "Plexing" }));
+    await waitFor(() =>
+      expect(screen.getByText("Plexing income estimate")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Minmatar Republic" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "lp_offers",
+        expect.objectContaining({
+          params: expect.objectContaining({ corporationId: 1000182 }),
+        }),
+      ),
+    );
+  });
+});
+
 describe("FW militia perspective", () => {
   it("Observer mode is the default and has no Defend/Push column", async () => {
     renderPage();
