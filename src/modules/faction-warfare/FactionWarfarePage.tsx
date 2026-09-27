@@ -136,6 +136,7 @@ type FwSortKey =
   | "contestedRank"
   | "vpPct"
   | "kills"
+  | "npcKills"
   | "jumps"
   | "hops";
 
@@ -148,6 +149,7 @@ const FW_SORT_KEYS: readonly FwSortKey[] = [
   "contestedRank",
   "vpPct",
   "kills",
+  "npcKills",
   "jumps",
   "hops",
 ];
@@ -242,6 +244,13 @@ const FW_COLUMNS: SortColumn<FwSortKey>[] = [
     label: "Kills 1h",
     numeric: true,
     description: "Ship kills in the last hour",
+  },
+  {
+    key: "npcKills",
+    label: "NPC Kills 1h",
+    numeric: true,
+    description:
+      "NPC (rat) kills in the last hour — high NPC kills with low ship kills suggests active plex farming",
   },
   {
     key: "jumps",
@@ -639,7 +648,9 @@ function Warzone({
             ? ` · ${BATTLEFIELD_LABEL[n.battlefield] ?? n.battlefield}`
             : ""
         }${n.contested !== "uncontested" ? ` · ${n.contested}` : ""}${
-          n.kills > 0 ? ` · ${n.kills} kills` : ""
+          n.kills > 0 || n.npcKills > 0
+            ? ` · ${n.kills} kills${n.npcKills > 0 ? ` (${n.npcKills} npc)` : ""}`
+            : ""
         }${hops != null ? ` · ${isCurrent ? "here" : `${hops}j`}` : ""}`,
         accent: perspective
           ? RELATIONSHIP_HEX[
@@ -894,6 +905,9 @@ function SystemTable({
                 }`}
               >
                 {s.kills > 0 ? formatInt(s.kills) : "—"}
+              </td>
+              <td className="px-3 py-1.5 text-right tabular-nums text-zinc-500">
+                {s.npcKills > 0 ? formatInt(s.npcKills) : "—"}
               </td>
               <td className="px-3 py-1.5 text-right tabular-nums text-zinc-400">
                 {s.jumps > 0 ? formatInt(s.jumps) : "—"}
