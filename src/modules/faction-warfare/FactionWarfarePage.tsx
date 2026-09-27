@@ -845,6 +845,11 @@ function Warzone({
       168,
       66,
     );
+    // Detailed tiles (#902) render only while the proximity filter bounds
+    // the view — full-warzone scope keeps today's compact single-line tile
+    // unchanged, both for readability at that node count and to avoid any
+    // perf regression there.
+    const detailed = radius !== "all";
     return playstyleSystems.map((n) => {
       const p = placed.get(String(n.systemId)) ?? { x: 0, y: 0 };
       const hops = dist[String(n.systemId)];
@@ -853,22 +858,39 @@ function Warzone({
       // the usual faction/relationship colour, so frontline/command-ops
       // stand out as where fights actually concentrate.
       const dimmed = playstyle === "pvp" && n.battlefield === "rearguard";
+      const trendArrow = (() => {
+        const tier = trendTier(n.vpVelocity);
+        return tier ? TREND_ARROW[tier] : undefined;
+      })();
       return {
         id: String(n.systemId),
         label: n.name,
         kind: "lowsec" as const,
-        sub: `${n.security.toFixed(1)}${
-          n.battlefield !== "rearguard"
-            ? ` · ${BATTLEFIELD_LABEL[n.battlefield] ?? n.battlefield}`
-            : ""
-        }${n.contested !== "uncontested" ? ` · ${n.contested}` : ""}${(() => {
-          const tier = trendTier(n.vpVelocity);
-          return tier ? ` ${TREND_ARROW[tier]}` : "";
-        })()}${
-          n.kills > 0 || n.npcKills > 0
-            ? ` · ${n.kills} kills${n.npcKills > 0 ? ` (${n.npcKills} npc)` : ""}`
-            : ""
-        }${hops != null ? ` · ${isCurrent ? "here" : `${hops}j`}` : ""}`,
+        sub: detailed
+          ? `${n.security.toFixed(1)}${n.contested !== "uncontested" ? ` · ${n.contested}` : ""}${hops != null ? ` · ${isCurrent ? "here" : `${hops}j`}` : ""}`
+          : `${n.security.toFixed(1)}${
+              n.battlefield !== "rearguard"
+                ? ` · ${BATTLEFIELD_LABEL[n.battlefield] ?? n.battlefield}`
+                : ""
+            }${n.contested !== "uncontested" ? ` · ${n.contested}` : ""}${
+              trendArrow ? ` ${trendArrow}` : ""
+            }${
+              n.kills > 0 || n.npcKills > 0
+                ? ` · ${n.kills} kills${n.npcKills > 0 ? ` (${n.npcKills} npc)` : ""}`
+                : ""
+            }${hops != null ? ` · ${isCurrent ? "here" : `${hops}j`}` : ""}`,
+        detail: detailed
+          ? {
+              vpPct: n.vpPct,
+              battlefieldLabel:
+                n.battlefield !== "rearguard"
+                  ? (BATTLEFIELD_LABEL[n.battlefield] ?? n.battlefield)
+                  : undefined,
+              kills: n.kills,
+              npcKills: n.npcKills,
+              trendArrow,
+            }
+          : undefined,
         accent: dimmed
           ? "#3f3f46" // zinc-700 — visibly muted vs. any faction/relationship hue
           : perspective
@@ -884,7 +906,14 @@ function Warzone({
         y: p.y,
       };
     });
-  }, [playstyleSystems, dist, characterSystemId, perspective, playstyle]);
+  }, [
+    playstyleSystems,
+    dist,
+    characterSystemId,
+    perspective,
+    playstyle,
+    radius,
+  ]);
   const graphEdges: SystemGraphEdge[] = data.edges
     .filter(([a, b]) => ids.has(a) && ids.has(b))
     .map(([a, b]) => ({
