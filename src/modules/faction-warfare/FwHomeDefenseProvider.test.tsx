@@ -12,6 +12,36 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
   sendNotification: (...args: unknown[]) => sendNotificationMock(...args),
 }));
 
+type KillPayload = {
+  killmailId: number;
+  solarSystemId: number;
+  timeSecs: number;
+  victimFactionId: number | null;
+  attackerFactionIds: number[];
+};
+let killHandler: ((payload: KillPayload) => void) | undefined;
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (name: string, handler: (e: { payload: unknown }) => void) => {
+    if (name === "zkill://kill") {
+      killHandler = (payload) => handler({ payload });
+    }
+    return Promise.resolve(() => {
+      killHandler = undefined;
+    });
+  },
+}));
+
+function fireKill(overrides: Partial<KillPayload>) {
+  killHandler?.({
+    killmailId: 1,
+    solarSystemId: 1,
+    timeSecs: Math.floor(Date.now() / 1000),
+    victimFactionId: null,
+    attackerFactionIds: [],
+    ...overrides,
+  });
+}
+
 function node(
   id: number,
   contested: string,
@@ -59,6 +89,7 @@ beforeEach(() => {
   invokeMock.mockReset();
   sendNotificationMock.mockClear();
   localStorage.clear();
+  killHandler = undefined;
 });
 
 describe("FwHomeDefenseProvider", () => {
@@ -115,5 +146,65 @@ describe("FwHomeDefenseProvider", () => {
     // Give the effect loop a tick to prove it stays idle, not to catch a race.
     await act(() => delay(50));
     expect(invokeMock).not.toHaveBeenCalledWith("intel_fw_systems");
+  });
+
+  it("eagerly refetches FW systems when a live kill lands in a watched system (#926)", async () => {
+    mockInvoke({
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      intel_fw_enlistment: () => 500003,
+      intel_fw_systems: () => ({
+        nodes: [node(1, "contested", 500003)],
+        edges: [],
+      }),
+      intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
+    });
+    renderProvider();
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("intel_fw_systems"),
+    );
+    const callsBefore = invokeMock.mock.calls.filter(
+      (c) => c[0] === "intel_fw_systems",
+    ).length;
+
+    await act(async () => {
+      fireKill({ solarSystemId: 1 });
+      await delay(10);
+    });
+
+    await waitFor(() => {
+      const callsAfter = invokeMock.mock.calls.filter(
+        (c) => c[0] === "intel_fw_systems",
+      ).length;
+      expect(callsAfter).toBeGreaterThan(callsBefore);
+    });
+  });
+
+  it("ignores a live kill in a system outside the selected militia's warzone", async () => {
+    mockInvoke({
+      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
+      intel_fw_enlistment: () => 500003,
+      intel_fw_systems: () => ({
+        nodes: [node(1, "contested", 500003)],
+        edges: [],
+      }),
+      intel_fw_jumps: () => ({ characterSystemId: 1, jumps: {} }),
+    });
+    renderProvider();
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("intel_fw_systems"),
+    );
+    const callsBefore = invokeMock.mock.calls.filter(
+      (c) => c[0] === "intel_fw_systems",
+    ).length;
+
+    await act(async () => {
+      fireKill({ solarSystemId: 999_999 }); // not in the watched warzone
+      await delay(50);
+    });
+
+    const callsAfter = invokeMock.mock.calls.filter(
+      (c) => c[0] === "intel_fw_systems",
+    ).length;
+    expect(callsAfter).toBe(callsBefore);
   });
 });

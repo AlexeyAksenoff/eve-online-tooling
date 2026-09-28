@@ -35,3 +35,4 @@ export * from "./scripts";
 export * from "./info";
 export * from "./feedback";
 export * from "./logs";
+export * from "./zkill";
