@@ -15,7 +15,7 @@ use std::path::Path;
 
 use futures_util::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::esi::AuthState;
 use crate::storage;
@@ -70,6 +70,10 @@ pub struct HotspotSystemCounts {
 #[serde(rename_all = "camelCase")]
 pub struct HotspotsResult {
     pub systems: Vec<HotspotSystemCounts>,
+    /// When the REST baseline was computed (unix epoch seconds) — the live
+    /// top-up (#925) only merges events observed strictly after this, so a
+    /// cached snapshot re-merged on every call never double-counts.
+    pub fetched_at: u64,
 }
 
 fn cache_key(my_faction: i64, enemy_faction: i64) -> String {
@@ -152,8 +156,52 @@ pub fn bucket_hotspots(
     out
 }
 
+/// Pure: add live-observed per-system counts on top of a REST baseline
+/// (#925) — the REST snapshot stays cached for [`HOTSPOT_TTL_SECS`]
+/// unmodified; this runs fresh on every call so a stale cache entry still
+/// reflects anything the live stream has seen since it was fetched, without
+/// ever re-caching the merged result (which would double-count on the next
+/// call once the same live events get merged again).
+pub fn merge_live_topup(
+    baseline: Vec<HotspotSystemCounts>,
+    friendly_live: &HashMap<i64, i64>,
+    enemy_live: &HashMap<i64, i64>,
+    cartel_live: &HashMap<i64, i64>,
+) -> Vec<HotspotSystemCounts> {
+    let mut map: HashMap<i64, HotspotSystemCounts> =
+        baseline.into_iter().map(|c| (c.system_id, c)).collect();
+    let mut bump = |id: i64, n: i64, f: fn(&mut HotspotSystemCounts, i64)| {
+        f(
+            map.entry(id).or_insert(HotspotSystemCounts {
+                system_id: id,
+                friendly_losses: 0,
+                enemy_losses: 0,
+                cartel_activity: 0,
+            }),
+            n,
+        );
+    };
+    for (&id, &n) in friendly_live {
+        bump(id, n, |c, n| c.friendly_losses += n);
+    }
+    for (&id, &n) in enemy_live {
+        bump(id, n, |c, n| c.enemy_losses += n);
+    }
+    for (&id, &n) in cartel_live {
+        bump(id, n, |c, n| c.cartel_activity += n);
+    }
+    let mut out: Vec<_> = map.into_values().collect();
+    out.sort_by_key(|c| c.system_id);
+    out
+}
+
 /// FW kill hotspots for the selected militia (#905): friendly losses, enemy
 /// losses, and NPC cartel activity, bucketed per system over the last ~6h.
+/// The REST baseline is cached [`HOTSPOT_TTL_SECS`]; on top of that, every
+/// call merges in anything the shared live kill-stream (#924) has observed
+/// since the baseline was fetched (#925) — no per-kill ESI resolution
+/// needed for those, since the live stream already carries `solar_system_
+/// id`/`faction_id` on every event.
 #[tauri::command]
 pub async fn intel_fw_hotspots(
     app: AppHandle,
@@ -163,27 +211,52 @@ pub async fn intel_fw_hotspots(
 ) -> Result<HotspotsResult, String> {
     let dir = storage::app_data_dir(&app)?;
     let key = cache_key(my_faction, enemy_faction);
-    if let Some(cached) = storage::cache_get::<HotspotsResult>(&dir, &key) {
-        return Ok(cached);
+    let mut result = match storage::cache_get::<HotspotsResult>(&dir, &key) {
+        Some(cached) => cached,
+        None => {
+            let http = auth_state.http().clone();
+            let cartel = cartel_faction_id(my_faction);
+
+            let friendly_refs = zkill::losses_for_faction(my_faction).await;
+            let enemy_refs = zkill::losses_for_faction(enemy_faction).await;
+            let mut cartel_refs = zkill::kills_for_faction(cartel).await;
+            cartel_refs.extend(zkill::losses_for_faction(cartel).await);
+            dedup_refs(&mut cartel_refs);
+
+            let friendly_ids = resolve_systems_within_window(&dir, &http, friendly_refs).await;
+            let enemy_ids = resolve_systems_within_window(&dir, &http, enemy_refs).await;
+            let cartel_ids = resolve_systems_within_window(&dir, &http, cartel_refs).await;
+
+            let fresh = HotspotsResult {
+                systems: bucket_hotspots(&friendly_ids, &enemy_ids, &cartel_ids),
+                fetched_at: crate::util::time::now_secs(),
+            };
+            let _ = storage::cache_put(&dir, &key, &fresh, HOTSPOT_TTL_SECS);
+            fresh
+        }
+    };
+
+    // Live top-up (#925): merge anything observed since `fetched_at`. Never
+    // re-cached — `result.fetched_at` stays the original baseline time, so
+    // the next call re-merges fresh instead of double-counting.
+    if let Some(state) = app.try_state::<zkill::live::ZkillStreamState>() {
+        let cartel = cartel_faction_id(my_faction);
+        let idx = state.index.lock();
+        let since = result.fetched_at;
+        let friendly_live = idx.counts_by_system_where(|e| {
+            e.time_secs > since && e.victim_faction_id == Some(my_faction)
+        });
+        let enemy_live = idx.counts_by_system_where(|e| {
+            e.time_secs > since && e.victim_faction_id == Some(enemy_faction)
+        });
+        let cartel_live = idx.counts_by_system_where(|e| {
+            e.time_secs > since
+                && (e.victim_faction_id == Some(cartel) || e.attacker_faction_ids.contains(&cartel))
+        });
+        result.systems =
+            merge_live_topup(result.systems, &friendly_live, &enemy_live, &cartel_live);
     }
 
-    let http = auth_state.http().clone();
-    let cartel = cartel_faction_id(my_faction);
-
-    let friendly_refs = zkill::losses_for_faction(my_faction).await;
-    let enemy_refs = zkill::losses_for_faction(enemy_faction).await;
-    let mut cartel_refs = zkill::kills_for_faction(cartel).await;
-    cartel_refs.extend(zkill::losses_for_faction(cartel).await);
-    dedup_refs(&mut cartel_refs);
-
-    let friendly_ids = resolve_systems_within_window(&dir, &http, friendly_refs).await;
-    let enemy_ids = resolve_systems_within_window(&dir, &http, enemy_refs).await;
-    let cartel_ids = resolve_systems_within_window(&dir, &http, cartel_refs).await;
-
-    let result = HotspotsResult {
-        systems: bucket_hotspots(&friendly_ids, &enemy_ids, &cartel_ids),
-    };
-    let _ = storage::cache_put(&dir, &key, &result, HOTSPOT_TTL_SECS);
     Ok(result)
 }
 
@@ -229,5 +302,37 @@ mod tests {
         let out = bucket_hotspots(&[3, 1, 2], &[], &[]);
         let ids: Vec<i64> = out.iter().map(|c| c.system_id).collect();
         assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn merge_live_topup_adds_onto_matching_systems_in_the_baseline() {
+        let baseline = bucket_hotspots(&[1], &[], &[]);
+        let friendly_live = HashMap::from([(1i64, 2i64)]);
+        let out = merge_live_topup(baseline, &friendly_live, &HashMap::new(), &HashMap::new());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].friendly_losses, 3); // 1 baseline + 2 live
+    }
+
+    #[test]
+    fn merge_live_topup_adds_a_new_system_not_in_the_baseline() {
+        let baseline = bucket_hotspots(&[1], &[], &[]);
+        let cartel_live = HashMap::from([(2i64, 1i64)]);
+        let out = merge_live_topup(baseline, &HashMap::new(), &HashMap::new(), &cartel_live);
+        let by_id: HashMap<i64, HotspotSystemCounts> =
+            out.into_iter().map(|c| (c.system_id, c)).collect();
+        assert_eq!(by_id[&1].friendly_losses, 1);
+        assert_eq!(by_id[&2].cartel_activity, 1);
+    }
+
+    #[test]
+    fn merge_live_topup_is_a_no_op_with_no_live_data() {
+        let baseline = bucket_hotspots(&[1, 1], &[2], &[]);
+        let out = merge_live_topup(
+            baseline.clone(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert_eq!(out, baseline);
     }
 }

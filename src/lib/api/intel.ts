@@ -154,6 +154,11 @@ export interface HotspotSystemCounts {
 
 export interface HotspotsResult {
   systems: HotspotSystemCounts[];
+  /** When the REST baseline was computed (unix epoch seconds) — live
+   *  top-up from the shared kill-stream (#925) is merged in on top of this
+   *  on every call, so the numbers can be fresher than `fetchedAt` alone
+   *  suggests. */
+  fetchedAt: number;
 }
 
 /** FW kill hotspots for the given militia pair (#905), cached ~5 min. */
