@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::esi::{authed_get, AuthState, EsiClient, SystemKills};
 use crate::model::AppError;
@@ -68,10 +68,37 @@ fn merge_activity(jumps: &[EsiJumps], kills: &[SystemKills]) -> HashMap<i64, Sys
     map
 }
 
+/// Overlay live per-system kill counts (#928) onto the ESI-sourced baseline
+/// — takes the max rather than summing, since the live window and ESI's
+/// rolling hour overlap (summing would double-count the same kills). Max
+/// just says "at least this many", picking whichever source is currently
+/// higher, without ESI's up-to-an-hour staleness capping what's shown.
+///
+/// Deliberately conservative: only bumps systems the baseline already
+/// knows about (has SDE name/security/region for) — a live-only system
+/// with no ESI jumps/kills yet is skipped rather than inserted with blank
+/// metadata. This is the least-validated of the live-stream integrations
+/// (#928); the scope stays narrow until it's proven worth relaxing
+/// `ACTIVITY_TTL_SECS` on the strength of it.
+fn overlay_live_kills(
+    mut activity: HashMap<i64, SystemActivity>,
+    live_counts: &HashMap<i64, i64>,
+) -> HashMap<i64, SystemActivity> {
+    for (system_id, entry) in activity.iter_mut() {
+        if let Some(&live) = live_counts.get(system_id) {
+            entry.ship_kills = entry.ship_kills.max(live);
+        }
+    }
+    activity
+}
+
 /// Build the system-id → activity map: serve the ~30-min cache, else fetch the
 /// jumps + kills aggregates, enrich with SDE name/security/region, and cache.
-/// Shared by the activity table and the neighbourhood view.
+/// Shared by the activity table and the neighbourhood view. The live overlay
+/// (#928) is applied fresh on every call, cache hit or miss, so a stale
+/// cached baseline still reflects anything the live stream has seen since.
 async fn activity_map(
+    app: &AppHandle,
     dir: &Path,
     esi: &EsiClient,
     refresh: bool,
@@ -80,37 +107,49 @@ async fn activity_map(
     // generation so an SDE update invalidates this immediately instead of
     // after 30 minutes (#884).
     let generation = crate::sde::generation_id(dir)?;
-    if !refresh {
-        if let Some(cached) =
-            storage::cache_get_versioned::<Vec<SystemActivity>>(dir, "system_activity", generation)
-        {
-            return Ok(cached.into_iter().map(|r| (r.system_id, r)).collect());
+    let cached_hit = if refresh {
+        None
+    } else {
+        storage::cache_get_versioned::<Vec<SystemActivity>>(dir, "system_activity", generation)
+    };
+    let mut activity = if let Some(cached) = cached_hit {
+        cached.into_iter().map(|r| (r.system_id, r)).collect()
+    } else {
+        let jumps: Vec<EsiJumps> = esi
+            .get_json("/latest/universe/system_jumps/", &[])
+            .await
+            .map_err(|e| e.to_string())?;
+        let kills = crate::esi::system_kills(esi)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut fresh = merge_activity(&jumps, &kills);
+
+        // Enrich with SDE name / security / region (k-space systems only).
+        let info = cached_system_info(dir)?;
+        for row in fresh.values_mut() {
+            if let Some((name, security, region)) = info.get(&row.system_id) {
+                row.name = name.clone();
+                row.security = *security;
+                row.region = region.clone();
+            }
         }
+
+        let rows: Vec<SystemActivity> = fresh.values().cloned().collect();
+        let _ = storage::cache_put_versioned(
+            dir,
+            "system_activity",
+            &rows,
+            ACTIVITY_TTL_SECS,
+            generation,
+        );
+        fresh
+    };
+
+    if let Some(state) = app.try_state::<crate::zkill::live::ZkillStreamState>() {
+        let live_counts = state.index.lock().counts_by_system();
+        activity = overlay_live_kills(activity, &live_counts);
     }
-
-    let jumps: Vec<EsiJumps> = esi
-        .get_json("/latest/universe/system_jumps/", &[])
-        .await
-        .map_err(|e| e.to_string())?;
-    let kills = crate::esi::system_kills(esi)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let mut activity = merge_activity(&jumps, &kills);
-
-    // Enrich with SDE name / security / region (k-space systems only).
-    let info = cached_system_info(dir)?;
-    for row in activity.values_mut() {
-        if let Some((name, security, region)) = info.get(&row.system_id) {
-            row.name = name.clone();
-            row.security = *security;
-            row.region = region.clone();
-        }
-    }
-
-    let rows: Vec<SystemActivity> = activity.values().cloned().collect();
-    let _ =
-        storage::cache_put_versioned(dir, "system_activity", &rows, ACTIVITY_TTL_SECS, generation);
     Ok(activity)
 }
 
@@ -123,7 +162,7 @@ pub async fn route_system_activity(
     refresh: bool,
 ) -> Result<Vec<SystemActivity>, String> {
     let dir = crate::storage::app_data_dir(&app)?;
-    let mut rows: Vec<SystemActivity> = activity_map(&dir, &esi, refresh)
+    let mut rows: Vec<SystemActivity> = activity_map(&app, &dir, &esi, refresh)
         .await?
         .into_values()
         .collect();
@@ -194,7 +233,9 @@ pub async fn route_system_neighbourhood(
     let edges = neighbourhood_edges(&adj, &distance);
 
     // Heat + names for every system in the neighbourhood.
-    let activity = activity_map(&dir, &esi, false).await.unwrap_or_default();
+    let activity = activity_map(&app, &dir, &esi, false)
+        .await
+        .unwrap_or_default();
     let info = cached_system_info(&dir)?;
     let mut nodes: Vec<NeighbourNode> = distance
         .iter()
@@ -773,5 +814,45 @@ mod tests {
         assert_eq!(map[&30009999].jumps, 0);
         assert_eq!(map[&30009999].ship_kills, 2);
         assert_eq!(map.len(), 3);
+    }
+
+    #[test]
+    fn overlay_live_kills_takes_the_max_not_the_sum() {
+        let mut activity = HashMap::new();
+        activity.insert(
+            30000142,
+            SystemActivity {
+                system_id: 30000142,
+                ship_kills: 3,
+                ..Default::default()
+            },
+        );
+        let live = HashMap::from([(30000142, 10)]);
+        let out = overlay_live_kills(activity, &live);
+        assert_eq!(out[&30000142].ship_kills, 10);
+    }
+
+    #[test]
+    fn overlay_live_kills_keeps_the_baseline_when_it_is_higher() {
+        let mut activity = HashMap::new();
+        activity.insert(
+            30000142,
+            SystemActivity {
+                system_id: 30000142,
+                ship_kills: 10,
+                ..Default::default()
+            },
+        );
+        let live = HashMap::from([(30000142, 2)]);
+        let out = overlay_live_kills(activity, &live);
+        assert_eq!(out[&30000142].ship_kills, 10);
+    }
+
+    #[test]
+    fn overlay_live_kills_skips_systems_not_already_in_the_baseline() {
+        let activity = HashMap::new();
+        let live = HashMap::from([(30000142, 5)]);
+        let out = overlay_live_kills(activity, &live);
+        assert!(out.is_empty());
     }
 }
