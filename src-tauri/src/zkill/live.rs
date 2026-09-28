@@ -149,6 +149,23 @@ impl KillIndex {
         }
         (kills, losses)
     }
+
+    /// Per-system counts of events matching an arbitrary predicate — the
+    /// building block feature-specific consumers (e.g. FW hotspots, #925)
+    /// use to bucket live events the same way their REST-based baseline
+    /// buckets historical ones.
+    pub fn counts_by_system_where(
+        &self,
+        mut matches: impl FnMut(&KillEvent) -> bool,
+    ) -> HashMap<i64, i64> {
+        let mut m = HashMap::new();
+        for e in &self.events {
+            if matches(e) {
+                *m.entry(e.solar_system_id).or_insert(0) += 1;
+            }
+        }
+        m
+    }
 }
 
 /// App-wide managed state: the rolling index plus a connectivity flag for the
