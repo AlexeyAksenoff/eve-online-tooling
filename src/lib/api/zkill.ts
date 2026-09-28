@@ -4,8 +4,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 // --- Shared zKillboard live kill-stream (#924) ---
 
 /** One live kill event from the shared background stream — mirrors Rust's
- *  `zkill::live::KillEvent`. Deliberately lean: no ship/pod split or entity
- *  names, just enough to place a kill in time, space, and faction terms. */
+ *  `zkill::live::KillEvent`. Deliberately lean: no ship info or entity
+ *  names, just enough to place a kill in time, space, faction, and corp/
+ *  alliance terms. */
 export interface KillEvent {
   killmailId: number;
   solarSystemId: number;
@@ -13,6 +14,11 @@ export interface KillEvent {
   timeSecs: number;
   victimFactionId: number | null;
   attackerFactionIds: number[];
+  victimCorporationId: number | null;
+  victimAllianceId: number | null;
+  /** Deduped; only attackers that have one (NPC/structure attackers don't). */
+  attackerCorporationIds: number[];
+  attackerAllianceIds: number[];
 }
 
 /** Subscribe to live kills as the shared background stream observes them. */

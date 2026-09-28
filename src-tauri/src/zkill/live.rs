@@ -47,18 +47,34 @@ pub struct KillEvent {
     pub time_secs: u64,
     pub victim_faction_id: Option<i64>,
     pub attacker_faction_ids: Vec<i64>,
+    /// The victim's corp/alliance — added for #927 (Local Intel's watchlist
+    /// is corp/alliance-scoped, not faction-scoped).
+    pub victim_corporation_id: Option<i64>,
+    pub victim_alliance_id: Option<i64>,
+    /// Deduped, corp/alliance ids of every attacker that has one (NPC/
+    /// structure attackers don't).
+    pub attacker_corporation_ids: Vec<i64>,
+    pub attacker_alliance_ids: Vec<i64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct RawVictim {
     #[serde(default)]
     faction_id: Option<i64>,
+    #[serde(default)]
+    corporation_id: Option<i64>,
+    #[serde(default)]
+    alliance_id: Option<i64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct RawAttacker {
     #[serde(default)]
     faction_id: Option<i64>,
+    #[serde(default)]
+    corporation_id: Option<i64>,
+    #[serde(default)]
+    alliance_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +90,14 @@ struct RawKillmail {
     attackers: Vec<RawAttacker>,
 }
 
+/// Deduped, sorted ids from an iterator, dropping `None`s.
+fn deduped_ids(ids: impl Iterator<Item = Option<i64>>) -> Vec<i64> {
+    let mut out: Vec<i64> = ids.flatten().collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// Parse one killstream text message into a [`KillEvent`]. Pure — no network,
 /// fully unit-testable. Returns `None` for anything that doesn't parse as a
 /// killmail (the socket occasionally sends non-kill control frames) or that's
@@ -84,16 +108,19 @@ pub fn parse_kill_event(raw: &str) -> Option<KillEvent> {
         return None;
     }
     let time_secs = crate::util::time::parse_rfc3339_epoch(&km.killmail_time).ok()?;
-    let mut attacker_faction_ids: Vec<i64> =
-        km.attackers.iter().filter_map(|a| a.faction_id).collect();
-    attacker_faction_ids.sort_unstable();
-    attacker_faction_ids.dedup();
+    let attacker_faction_ids = deduped_ids(km.attackers.iter().map(|a| a.faction_id));
+    let attacker_corporation_ids = deduped_ids(km.attackers.iter().map(|a| a.corporation_id));
+    let attacker_alliance_ids = deduped_ids(km.attackers.iter().map(|a| a.alliance_id));
     Some(KillEvent {
         killmail_id: km.killmail_id,
         solar_system_id: km.solar_system_id,
         time_secs,
         victim_faction_id: km.victim.faction_id,
         attacker_faction_ids,
+        victim_corporation_id: km.victim.corporation_id,
+        victim_alliance_id: km.victim.alliance_id,
+        attacker_corporation_ids,
+        attacker_alliance_ids,
     })
 }
 
@@ -324,6 +351,27 @@ mod tests {
         assert_eq!(event.victim_faction_id, Some(500003));
         // Deduped even though the raw mail listed the attacker faction twice.
         assert_eq!(event.attacker_faction_ids, vec![500002]);
+    }
+
+    #[test]
+    fn parses_victim_and_attacker_corp_alliance_ids() {
+        let raw = r#"{
+            "killmail_id": 2,
+            "killmail_time": "2026-01-02T03:04:05Z",
+            "solar_system_id": 30002813,
+            "victim": {"corporation_id": 98000001, "alliance_id": 99000001},
+            "attackers": [
+                {"corporation_id": 98000002, "alliance_id": 99000002},
+                {"corporation_id": 98000002},
+                {"character_id": 123456}
+            ]
+        }"#;
+        let event = parse_kill_event(raw).expect("should parse");
+        assert_eq!(event.victim_corporation_id, Some(98000001));
+        assert_eq!(event.victim_alliance_id, Some(99000001));
+        // Deduped: two attackers share corp 98000002.
+        assert_eq!(event.attacker_corporation_ids, vec![98000002]);
+        assert_eq!(event.attacker_alliance_ids, vec![99000002]);
     }
 
     #[test]
