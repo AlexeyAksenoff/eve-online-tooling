@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   detectHomeDefenseAlerts,
+  shouldTriggerLiveRefetch,
   snapshotSystems,
   type HomeDefenseSettings,
 } from "./homeDefenseAlerts";
@@ -136,5 +137,31 @@ describe("detectHomeDefenseAlerts", () => {
       node(2, "vulnerable", 500003),
     ];
     expect(detectHomeDefenseAlerts(prev, curr, 500003, {}, ALL_ON)).toEqual([]);
+  });
+});
+
+describe("shouldTriggerLiveRefetch", () => {
+  const watched = new Set([1, 2, 3]);
+
+  it("ignores a kill in a system outside the watched set", () => {
+    expect(shouldTriggerLiveRefetch(99, watched, 0, 100_000, 30_000)).toBe(
+      false,
+    );
+  });
+
+  it("triggers for a watched system when the cooldown has elapsed", () => {
+    expect(shouldTriggerLiveRefetch(1, watched, 0, 30_000, 30_000)).toBe(true);
+  });
+
+  it("does not re-trigger inside the cooldown window (a kill flurry)", () => {
+    expect(shouldTriggerLiveRefetch(1, watched, 10_000, 20_000, 30_000)).toBe(
+      false,
+    );
+  });
+
+  it("always triggers the very first time (lastTriggeredAtMs = -Infinity)", () => {
+    expect(shouldTriggerLiveRefetch(1, watched, -Infinity, 0, 30_000)).toBe(
+      true,
+    );
   });
 });

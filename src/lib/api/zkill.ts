@@ -1,0 +1,57 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+
+// --- Shared zKillboard live kill-stream (#924) ---
+
+/** One live kill event from the shared background stream — mirrors Rust's
+ *  `zkill::live::KillEvent`. Deliberately lean: no ship/pod split or entity
+ *  names, just enough to place a kill in time, space, and faction terms. */
+export interface KillEvent {
+  killmailId: number;
+  solarSystemId: number;
+  /** Unix epoch seconds. */
+  timeSecs: number;
+  victimFactionId: number | null;
+  attackerFactionIds: number[];
+}
+
+/** Subscribe to live kills as the shared background stream observes them. */
+export function onZkillKill(
+  handler: (event: KillEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<KillEvent>("zkill://kill", (event) => handler(event.payload));
+}
+
+export interface ZkillStreamStatus {
+  connected: boolean;
+  eventCount: number;
+  windowSecs: number;
+}
+
+/** Connectivity + retained-index size for the live stream — a status
+ *  indicator or debugging aid, not the per-system/per-faction breakdown
+ *  (see `zkillStreamSystemCounts`/`zkillStreamFactionCounts`). */
+export function zkillStreamStatus(): Promise<ZkillStreamStatus> {
+  return invoke<ZkillStreamStatus>("zkill_stream_status");
+}
+
+/** Live kill counts per solar system across the retained window (keyed by
+ *  `String(systemId)`), universe-wide — no faction filter. */
+export function zkillStreamSystemCounts(): Promise<Record<string, number>> {
+  return invoke<Record<string, number>>("zkill_stream_system_counts");
+}
+
+export interface ZkillStreamFactionCounts {
+  kills: number;
+  losses: number;
+}
+
+/** Live `(kills-as-attacker, losses-as-victim)` for one faction across the
+ *  retained window. */
+export function zkillStreamFactionCounts(
+  factionId: number,
+): Promise<ZkillStreamFactionCounts> {
+  return invoke<ZkillStreamFactionCounts>("zkill_stream_faction_counts", {
+    factionId,
+  });
+}

@@ -10,6 +10,7 @@ import {
   fwSystems,
   intelFwEnlistment,
   intelFwJumps,
+  onZkillKill,
 } from "../../lib/api";
 import { usePersistentState } from "../../lib/usePersistentState";
 import { FACTION_WARFARE_JUMP_DISTANCE_REFRESH_MS } from "../../lib/refreshIntervals";
@@ -20,6 +21,7 @@ import {
 } from "./factionPerspective";
 import {
   detectHomeDefenseAlerts,
+  shouldTriggerLiveRefetch,
   snapshotSystems,
   type NearbyFlipRadius,
   type SystemStateSnapshot,
@@ -27,6 +29,10 @@ import {
 import { FwHomeDefenseContext } from "./fwHomeDefenseContext";
 
 const EMPTY_DIST: Record<string, number> = {};
+/** Don't let a real fight (several kills a minute) hammer ESI with a
+ *  refetch per kill — one eager re-check per system-of-interest per this
+ *  window is enough to meaningfully cut alert latency without spamming. */
+const KILL_TRIGGERED_REFETCH_COOLDOWN_MS = 30_000;
 
 /** Best-effort desktop notification — mirrors the private helper in
  *  useLocalIntelData.ts (not exported there, so duplicated rather than
@@ -154,6 +160,46 @@ export function FwHomeDefenseProvider({ children }: { children: ReactNode }) {
       }
     }
   }, [myWarzoneSystems, myFaction, dist, vulnerableAlertOn, nearbyFlipRadius]);
+
+  // Live-triggered eager refetch (#926): a kill in a watched system is a
+  // strong signal something's changing there right now, worth checking
+  // sooner than the next scheduled poll (there isn't a fixed interval on
+  // `fwSystems` at all today — it otherwise only refetches on focus/mount).
+  // Doesn't skip the real check: `map.refetch()` still does a genuine
+  // `/fw/systems/` fetch, so the actual vulnerable/flip detection above
+  // still runs against real data once it lands — this only changes *when*
+  // that happens.
+  const lastTriggeredAtRef = useRef(-Infinity);
+  const watchedSystemIds = useMemo(
+    () => new Set(myWarzoneSystems.map((s) => s.systemId)),
+    [myWarzoneSystems],
+  );
+  useEffect(() => {
+    if (!rulesEnabled || watchedSystemIds.size === 0) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    onZkillKill((event) => {
+      if (
+        shouldTriggerLiveRefetch(
+          event.solarSystemId,
+          watchedSystemIds,
+          lastTriggeredAtRef.current,
+          Date.now(),
+          KILL_TRIGGERED_REFETCH_COOLDOWN_MS,
+        )
+      ) {
+        lastTriggeredAtRef.current = Date.now();
+        void map.refetch();
+      }
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [rulesEnabled, watchedSystemIds, map]);
 
   return (
     <FwHomeDefenseContext.Provider

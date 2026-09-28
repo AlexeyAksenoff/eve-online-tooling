@@ -98,3 +98,33 @@ export function detectHomeDefenseAlerts(
   }
   return alerts;
 }
+
+/**
+ * Should a live kill event (#924, #926) trigger an eager re-check of FW
+ * system state, ahead of whatever polling cadence is already scheduled?
+ *
+ * Important honesty check: a kill happening does **not by itself** mean a
+ * system went vulnerable or flipped contested state — that's driven by FW
+ * campaign VP thresholds, which only `/fw/systems/` exposes, not zKill.
+ * What a kill *does* mean is "something is happening here right now", which
+ * strongly correlates with a contested-state change being imminent or
+ * already underway — worth checking sooner rather than waiting for the next
+ * scheduled poll. This function only decides *whether it's worth asking
+ * again right now*; the actual transition detection still happens via
+ * {@link detectHomeDefenseAlerts} against freshly-fetched data afterward.
+ *
+ * Gated two ways: the event must be in a system the caller cares about
+ * (`watchedSystemIds` — typically the militia's whole warzone), and a
+ * cooldown prevents a kill flurry (a real fight easily produces several
+ * kills a minute) from re-triggering an ESI fetch on every single one.
+ */
+export function shouldTriggerLiveRefetch(
+  eventSystemId: number,
+  watchedSystemIds: ReadonlySet<number>,
+  lastTriggeredAtMs: number,
+  nowMs: number,
+  cooldownMs: number,
+): boolean {
+  if (!watchedSystemIds.has(eventSystemId)) return false;
+  return nowMs - lastTriggeredAtMs >= cooldownMs;
+}
