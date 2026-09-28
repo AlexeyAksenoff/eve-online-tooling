@@ -16,6 +16,8 @@
 use std::path::Path;
 use std::sync::LazyLock;
 
+pub mod live;
+
 use futures_util::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
