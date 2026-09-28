@@ -206,6 +206,7 @@ pub fn run() {
             app.manage(std::sync::Arc::new(plugins::PluginManager::new()));
             app.manage(esi::AuthState::with_cache(dir.clone()));
             app.manage(modules::production::commands::CostIndexLocks::default());
+            app.manage(zkill::live::ZkillStreamState::default());
             modules::dpsmeter::init(app);
             mcp::init(app);
 
@@ -240,6 +241,11 @@ pub fn run() {
             // The script loop: one background timeline that re-runs every
             // Run-state script on its minute interval (see scripts::scheduler).
             modules::scripts::scheduler::spawn(app.handle().clone());
+
+            // Live zKillboard killstream (#924): one persistent connection,
+            // shared app-wide, feeding every feature that wants "who's dying
+            // where right now" instead of each polling zKill separately.
+            zkill::live::spawn(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -395,6 +401,9 @@ pub fn run() {
             modules::localintel::commands::localintel_scan,
             modules::localintel::commands::localintel_log_names,
             modules::localintel::commands::localintel_zkill,
+            zkill::live::zkill_stream_status,
+            zkill::live::zkill_stream_system_counts,
+            zkill::live::zkill_stream_faction_counts,
             modules::localintel::commands::localintel_get_watchlist,
             modules::localintel::commands::localintel_set_watchlist,
             modules::localintel::commands::localintel_system_kills,
