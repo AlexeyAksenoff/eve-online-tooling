@@ -1,12 +1,19 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
   errorMessage,
   localintelSystemKills,
+  onZkillKill,
   type SystemKill,
 } from "../../lib/api";
 import { formatIsk } from "../../lib/format";
+import { matchesScannedSystem, shouldNotifyLiveWatch } from "./liveWatch";
+
+/** Live-triggered refetches are cheap (just today's kill list for one
+ *  system) but still worth throttling against a busy system's kill
+ *  flurry — same cooldown shape used elsewhere for live-stream triggers. */
+const LIVE_TOPUP_COOLDOWN_MS = 15_000;
 
 const SLOT_ORDER = ["high", "mid", "low", "rig", "subsystem", "drone"] as const;
 const SLOT_LABEL: Record<string, string> = {
@@ -157,6 +164,43 @@ export function KillsTab({
     staleTime: 30_000,
     refetchInterval: active && autoRefresh ? 30_000 : false,
   });
+
+  // Live top-up (#927): a kill lands in the scanned system, refetch
+  // immediately rather than waiting for the next 30s auto-refresh tick (or,
+  // with auto-refresh off, waiting for the user to switch tabs and back).
+  const lastLiveTopupAtRef = useRef(-Infinity);
+  useEffect(() => {
+    if (systemId == null || !active) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    onZkillKill((event) => {
+      if (!matchesScannedSystem(event, systemId)) return;
+      const now = Date.now();
+      if (
+        !shouldNotifyLiveWatch(
+          lastLiveTopupAtRef.current,
+          now,
+          LIVE_TOPUP_COOLDOWN_MS,
+        )
+      ) {
+        return;
+      }
+      lastLiveTopupAtRef.current = now;
+      void kills.refetch();
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+    // `kills` is a query result object that changes identity every render;
+    // only its stable `.refetch` is used inside the effect, and
+    // re-subscribing on every render would thrash the listener for no
+    // benefit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [systemId, active]);
 
   const onAttackerClick = (characterName: string) => {
     navigate("/pvp", { state: { pilotName: characterName } });

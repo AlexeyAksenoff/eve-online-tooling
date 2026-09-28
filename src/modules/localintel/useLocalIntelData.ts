@@ -1,6 +1,7 @@
 import {
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useReducer,
   useRef,
@@ -18,6 +19,7 @@ import {
   localintelGetWatchlist,
   localintelSetWatchlist,
   localintelZkill,
+  onZkillKill,
   routeLocation,
   systemNeighbourhood,
   type LocalPilot,
@@ -28,6 +30,11 @@ import { usePersistentState } from "../../lib/usePersistentState";
 import { useEveLogDir } from "../../lib/useEveLogDir";
 import { ModuleActiveContext } from "../../components/moduleActiveContext";
 import { classifyArrivals } from "./classifyArrivals";
+import { matchesWatchlist, shouldNotifyLiveWatch } from "./liveWatch";
+
+/** Don't let a fight involving a watched corp/alliance (several kills a
+ *  minute) flood live notifications — one per this window is enough. */
+const LIVE_WATCH_NOTIFY_COOLDOWN_MS = 30_000;
 
 /** Hostile player-corp threshold: any negative standing — matches the "red"
  *  classification the pilot list uses (standing < 0), rather than the old, much
@@ -218,6 +225,42 @@ export function useLocalIntelData() {
     () => new Set((watchlist.data ?? []).map((w) => w.id)),
     [watchlist.data],
   );
+
+  // Live watchlist alert (#927): a watched corp/alliance in a live kill
+  // anywhere — victim or attacker — notifies immediately, independent of
+  // the next paste/scan. Complements (doesn't replace) the scan-diff
+  // watchlist/red/neutral alerting below, which is about who's *in local*.
+  const lastLiveWatchNotifyRef = useRef(-Infinity);
+  useEffect(() => {
+    if (watchIds.size === 0) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    onZkillKill((event) => {
+      if (!matchesWatchlist(event, watchIds)) return;
+      const now = Date.now();
+      if (
+        !shouldNotifyLiveWatch(
+          lastLiveWatchNotifyRef.current,
+          now,
+          LIVE_WATCH_NOTIFY_COOLDOWN_MS,
+        )
+      ) {
+        return;
+      }
+      lastLiveWatchNotifyRef.current = now;
+      notify(
+        "⚠️ Watchlisted activity (live)",
+        "A watched corp/alliance is in a fight right now.",
+      );
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [watchIds]);
 
   const [zkill, setZkill] = useState<Map<number, ZkillStats>>(new Map());
 
