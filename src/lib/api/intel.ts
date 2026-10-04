@@ -69,6 +69,11 @@ export interface FwSystemNode {
    *  0..1 units as `vpPct` (0.15 = 15 points/hour). Null until at least two
    *  samples exist, or right after an ownership flip resets the history. */
   vpVelocity: number | null;
+  /** Raw (un-annualized) ΔVP% actually observed across the same retained
+   *  history window `vpVelocity` is computed from — "how much did this
+   *  change in the last ~30 min", not per-hour. Same 0..1 units as
+   *  `vpPct`; null under the same conditions as `vpVelocity`. */
+  vpDelta30m: number | null;
   /** Galactic map-plane coordinates (seed the star-map layout). */
   x: number;
   z: number;

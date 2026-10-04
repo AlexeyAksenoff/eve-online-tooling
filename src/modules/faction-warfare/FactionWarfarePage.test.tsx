@@ -66,6 +66,7 @@ function node(
     jumps: 0,
     battlefield,
     vpVelocity,
+    vpDelta30m: null,
     x: id * 1e15,
     z: id * 1e15,
   };
@@ -388,6 +389,86 @@ describe("FW militia perspective", () => {
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
     expect(inTable().queryByText("defend")).not.toBeInTheDocument();
+  });
+});
+
+describe("FW VP change columns (Δ30m / Δ login)", () => {
+  it("Observer mode has no Δ30m/Δ login columns", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("columnheader", { name: /Δ 30m/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("columnheader", { name: /Δ login/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("signs the 30m delta for the selected militia: an enemy gain reads negative, an enemy loss reads positive", async () => {
+    const nodes = [
+      // Amarr-occupied, gained 0.4 VP over the window — bad for Minmatar.
+      {
+        ...node("AmarrGain", "contested", 10, 500003, "Amarr"),
+        vpDelta30m: 0.4,
+      },
+      // Amarr-occupied, lost 0.2 VP over the window — good for Minmatar.
+      {
+        ...node("AmarrLoss", "contested", 11, 500003, "Amarr"),
+        vpDelta30m: -0.2,
+      },
+    ];
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes, edges: [] }),
+      auth_characters: () => [],
+      auth_active_character: () => null,
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("AmarrGain")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Minmatar Republic" }));
+
+    await waitFor(() => {
+      const gainRow = inTable().getByText("AmarrGain").closest("tr")!;
+      expect(within(gainRow).getByText("-40.0%")).toBeInTheDocument();
+    });
+    const lossRow = inTable().getByText("AmarrLoss").closest("tr")!;
+    expect(within(lossRow).getByText("+20.0%")).toBeInTheDocument();
+  });
+
+  it("anchors the Δ login column at the first-seen VP and shows 0.0% with no movement yet", async () => {
+    const nodes = [
+      {
+        ...node("FreshSystem", "contested", 12, 500003, "Amarr"),
+        vpDelta30m: null,
+      },
+    ];
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes, edges: [] }),
+      auth_characters: () => [],
+      auth_active_character: () => null,
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("FreshSystem")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Amarr Empire" }));
+
+    const row = await waitFor(() =>
+      inTable().getByText("FreshSystem").closest("tr")!,
+    );
+    // No history yet (vpDelta30m null) → "—"; login baseline anchors on
+    // first observation → "0.0%", not a bogus nonzero delta.
+    expect(within(row).getByTitle(/the last 30 min/).textContent).toBe("—");
+    expect(
+      within(row).getByTitle(/since you opened this session/).textContent,
+    ).toBe("0.0%");
   });
 });
 

@@ -273,6 +273,13 @@ pub struct FwSystemNode {
     /// ownership flip resets its history.
     #[serde(default)]
     pub vp_velocity: Option<f64>,
+    /// Raw (un-annualized) ΔVP% actually observed across the same retained
+    /// history window `vp_velocity` is computed from — i.e. "how much did
+    /// this change in the last ~30 min", not per-hour. Same 0..1 units as
+    /// `vp_pct`; `None` under the same conditions as `vp_velocity` (fewer
+    /// than two samples, or a just-flipped system).
+    #[serde(default)]
+    pub vp_delta_30m: Option<f64>,
     /// Galactic map-plane coordinates (seed the star-map layout).
     pub x: f64,
     pub z: f64,
@@ -303,6 +310,19 @@ struct VpSample {
     occupier_id: i64,
 }
 
+/// Both forms of a system's VP movement across its retained on-disk history
+/// window (#899, extended for the raw delta): `per_hour` is the existing
+/// annualized rate (what the Trend arrows/ETA use), `delta` is the raw,
+/// un-annualized change actually observed across the window — what "in the
+/// last ~30 min" literally means, since the window is whatever's been
+/// retained at the app's actual fetch cadence, not always exactly 30
+/// minutes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct VpWindowChange {
+    per_hour: f64,
+    delta: f64,
+}
+
 /// Push a fresh sample for every current FW system into `history`, prune
 /// samples beyond [`VP_HISTORY_MAX_SAMPLES`], and return each system's
 /// ΔVP%/hour computed across its oldest→newest retained sample. `None` for a
@@ -323,7 +343,7 @@ fn update_vp_history(
     samples: &[(i64, i64, f64)],
     now: i64,
     max_samples: usize,
-) -> HashMap<i64, f64> {
+) -> HashMap<i64, VpWindowChange> {
     let mut velocity = HashMap::with_capacity(samples.len());
     for &(system_id, occupier_id, vp_pct) in samples {
         let history_for_system = history.entry(system_id).or_default();
@@ -344,7 +364,14 @@ fn update_vp_history(
         if let (Some(first), Some(last)) = (history_for_system.front(), history_for_system.back()) {
             let dt_hours = (last.ts - first.ts) as f64 / 3600.0;
             if dt_hours > 0.0 {
-                velocity.insert(system_id, (last.vp_pct - first.vp_pct) / dt_hours);
+                let delta = last.vp_pct - first.vp_pct;
+                velocity.insert(
+                    system_id,
+                    VpWindowChange {
+                        per_hour: delta / dt_hours,
+                        delta,
+                    },
+                );
             }
         }
     }
@@ -509,6 +536,7 @@ pub async fn intel_fw_systems(
                 z,
                 battlefield: String::new(), // filled in below by classify_battlefield
                 vp_velocity: None,          // filled in below by update_vp_history
+                vp_delta_30m: None,         // filled in below by update_vp_history
             }
         })
         .collect();
@@ -535,7 +563,8 @@ pub async fn intel_fw_systems(
     let velocity_by_id = update_vp_history(&mut vp_history, &samples, now, VP_HISTORY_MAX_SAMPLES);
     let _ = storage::save_data(&dir, VP_HISTORY_KEY, &vp_history);
     for n in &mut nodes {
-        n.vp_velocity = velocity_by_id.get(&n.system_id).copied();
+        n.vp_velocity = velocity_by_id.get(&n.system_id).map(|c| c.per_hour);
+        n.vp_delta_30m = velocity_by_id.get(&n.system_id).map(|c| c.delta);
     }
     // Most-contested first in the table (highest capture progress on top).
     nodes.sort_by(|a, b| {
@@ -834,6 +863,7 @@ mod tests {
             z: 0.0,
             battlefield: String::new(),
             vp_velocity: None,
+            vp_delta_30m: None,
         }
     }
 
@@ -945,9 +975,12 @@ mod tests {
     fn two_samples_compute_delta_vp_per_hour() {
         let mut history = empty_history();
         update_vp_history(&mut history, &[(1, 500003, 0.10)], 0, 6);
-        // +0.20 VP over 1800s (0.5h) → 0.40/hour.
+        // +0.20 VP over 1800s (0.5h) → 0.40/hour, and the raw 0.20 delta
+        // itself (#NNN) — the two differ whenever the window isn't exactly
+        // an hour, which this case exercises on purpose.
         let out = update_vp_history(&mut history, &[(1, 500003, 0.30)], 1_800, 6);
-        assert!((out[&1] - 0.40).abs() < 1e-9);
+        assert!((out[&1].per_hour - 0.40).abs() < 1e-9);
+        assert!((out[&1].delta - 0.20).abs() < 1e-9);
     }
 
     #[test]
@@ -955,7 +988,8 @@ mod tests {
         let mut history = empty_history();
         update_vp_history(&mut history, &[(1, 500003, 0.50)], 0, 6);
         let out = update_vp_history(&mut history, &[(1, 500003, 0.40)], 3_600, 6);
-        assert!((out[&1] - (-0.10)).abs() < 1e-9);
+        assert!((out[&1].per_hour - (-0.10)).abs() < 1e-9);
+        assert!((out[&1].delta - (-0.10)).abs() < 1e-9);
     }
 
     #[test]
@@ -969,8 +1003,9 @@ mod tests {
         assert_eq!(history[&1].len(), 2);
         let out = update_vp_history(&mut history, &[(1, 500003, 0.45)], 2_700, 2);
         // Oldest retained sample is now the previous push (i=7, vp=0.35, ts=2100);
-        // Δ0.10 over 600s (1/6 h) → 0.60/hour.
-        assert!((out[&1] - 0.60).abs() < 1e-9);
+        // Δ0.10 over 600s (1/6 h) → 0.60/hour, 0.10 raw delta.
+        assert!((out[&1].per_hour - 0.60).abs() < 1e-9);
+        assert!((out[&1].delta - 0.10).abs() < 1e-9);
     }
 
     #[test]
