@@ -28,7 +28,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { computeLayout } from "./systemGraphLayout";
+import { computeLayout, computeRadialLayout } from "./systemGraphLayout";
 import { SEC_HEX } from "../lib/security";
 
 /** Visual class of a system node — drives its colour. */
@@ -99,6 +99,11 @@ const KIND_HEX: Record<NodeKind, string> = {
   unknown: "#a1a1aa",
 };
 
+/** Edge colour for a link touching a selected node — distinct from the
+ *  default stargate grey and wormhole purple so a clicked system's
+ *  connections stand out at a glance. */
+const SELECTED_EDGE_HEX = "#38bdf8"; // sky-400
+
 /** Colour of a node's border/text by kind. */
 function kindClass(kind: NodeKind): string {
   switch (kind) {
@@ -117,13 +122,17 @@ function kindClass(kind: NodeKind): string {
 
 /**
  * How the nodes are arranged. `star` uses each node's real coordinates (only
- * offered when the nodes carry them); `tree` is the stargate BFS layout; `grid`
- * and `list` are index-based fallbacks. Switchable at runtime.
+ * offered when the nodes carry them); `region` clusters by `group`; `radial`
+ * ("Center") rings connected systems out from `rootId` (only offered when a
+ * root is given); `tree` is the stargate BFS layout; `grid` and `list` are
+ * index-based fallbacks. Switchable at runtime.
  */
-export type LayoutMode = "star" | "region" | "tree" | "grid" | "list";
+export type LayoutMode =
+  "star" | "region" | "radial" | "tree" | "grid" | "list";
 const LAYOUT_LABELS: Record<LayoutMode, string> = {
   star: "Star",
   region: "Region",
+  radial: "Center",
   tree: "Tree",
   grid: "Grid",
   list: "List",
@@ -173,14 +182,20 @@ function groupedLayout(
   return pos;
 }
 
-/** Node positions for a given layout mode. `tree` reuses the BFS `layout`. */
+/** Node positions for a given layout mode. `tree` reuses the BFS `layout`;
+ *  `radial` ("Center") recomputes around `rootId` on demand (cheap enough —
+ *  a few hundred nodes at most — and it needs `edges`/`rootId`, which the
+ *  other modes don't). */
 function positionsForMode(
   mode: LayoutMode,
   nodes: SystemGraphNode[],
   tree: Map<string, { x: number; y: number }>,
+  edges: SystemGraphEdge[],
+  rootId: string | undefined,
 ): Map<string, { x: number; y: number }> {
   if (mode === "tree") return tree;
   if (mode === "region") return groupedLayout(nodes);
+  if (mode === "radial") return computeRadialLayout(nodes, edges, rootId);
   const pos = new Map<string, { x: number; y: number }>();
   if (mode === "star") {
     nodes.forEach((n) =>
@@ -559,9 +574,10 @@ export function SystemGraph({
     const m: LayoutMode[] = [];
     if (hasCoords) m.push("star");
     if (hasGroups) m.push("region");
+    if (rootId) m.push("radial");
     m.push("tree", "grid", "list");
     return m;
-  }, [hasCoords, hasGroups]);
+  }, [hasCoords, hasGroups, rootId]);
 
   const [mode, setMode] = useState<LayoutMode>(() => {
     if (storageKey && typeof localStorage !== "undefined") {
@@ -569,6 +585,7 @@ export function SystemGraph({
       if (
         saved === "star" ||
         saved === "region" ||
+        saved === "radial" ||
         saved === "tree" ||
         saved === "grid" ||
         saved === "list"
@@ -582,8 +599,8 @@ export function SystemGraph({
   });
 
   const positionsFor = useCallback(
-    (m: LayoutMode) => positionsForMode(m, inputNodes, layout),
-    [inputNodes, layout],
+    (m: LayoutMode) => positionsForMode(m, inputNodes, layout, edges, rootId),
+    [inputNodes, layout, edges, rootId],
   );
 
   // Full-screen toggle (Escape exits).
@@ -627,11 +644,23 @@ export function SystemGraph({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inputNodes, positionsFor, storageKey]);
 
+  // Nodes with a currently-selected tile — edges touching any of them render
+  // highlighted, so clicking a system traces its connections at a glance.
+  // Reads `rfNodes.selected` directly: React Flow's own click-selection
+  // keeps that in sync via `onNodesChange`, no separate state to own here.
+  const selectedIds = useMemo(
+    () => new Set(rfNodes.filter((n) => n.selected).map((n) => n.id)),
+    [rfNodes],
+  );
+
   const rfEdges: Edge[] = useMemo(
     () =>
       edges.map((e, i) => {
-        const color =
-          e.color ?? (e.variant === "wormhole" ? "#a855f7" : "#52525b");
+        const highlighted =
+          selectedIds.has(e.source) || selectedIds.has(e.target);
+        const color = highlighted
+          ? SELECTED_EDGE_HEX
+          : (e.color ?? (e.variant === "wormhole" ? "#a855f7" : "#52525b"));
         return {
           id: `${e.source}-${e.target}-${i}`,
           source: e.source,
@@ -639,14 +668,15 @@ export function SystemGraph({
           type: "floating",
           label: e.label,
           animated: e.variant === "wormhole" && !e.dashed,
+          zIndex: highlighted ? 1 : 0,
           style: {
             stroke: color,
-            strokeWidth: 1.5,
+            strokeWidth: highlighted ? 2.5 : 1.5,
             strokeDasharray: e.dashed ? "5 4" : undefined,
           },
         };
       }),
-    [edges],
+    [edges, selectedIds],
   );
 
   const handleNodeClick = useCallback(
