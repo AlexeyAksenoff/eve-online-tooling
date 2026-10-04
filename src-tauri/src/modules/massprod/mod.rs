@@ -11,3 +11,4 @@
 //! `invGroups.groupName` bucketing.
 
 pub mod commands;
+pub mod lists;
