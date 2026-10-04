@@ -31,6 +31,7 @@ import {
   type SystemGraphEdge,
 } from "../../components/SystemGraph";
 import { Page, PageHeader } from "../../components/page";
+import { SearchFilterRow } from "../../components/forms";
 import {
   SortHeaderCell,
   type SortColumn,
@@ -870,6 +871,17 @@ function Warzone({
         ? { key: "farmScore", dir: "desc" }
         : undefined;
 
+  // Name filter: typing narrows both the table and the map to systems whose
+  // name contains the query (case-insensitive substring), hiding the rest.
+  // Persisted like the other view filters; applied upstream of the
+  // contested-state "Show" split so it scopes both together.
+  const [nameQuery, setNameQuery] = usePersistentState("fw.nameFilter", "");
+  const nameFilteredSystems = useMemo(() => {
+    const q = nameQuery.trim().toLowerCase();
+    if (!q) return playstyleSystems;
+    return playstyleSystems.filter((s) => s.name.toLowerCase().includes(q));
+  }, [playstyleSystems, nameQuery]);
+
   // Kill hotspots (#905): zKillboard faction-scoped feeds bucketed into
   // friendly/enemy/cartel per system, over the last ~6h — a heat layer
   // toggle on the map, mutually exclusive with the default kill-heat tint.
@@ -907,36 +919,36 @@ function Warzone({
   );
 
   const ids = useMemo(
-    () => new Set(playstyleSystems.map((s) => s.systemId)),
-    [playstyleSystems],
+    () => new Set(nameFilteredSystems.map((s) => s.systemId)),
+    [nameFilteredSystems],
   );
 
   const tableSystems = useMemo(() => {
-    if (filter === "all") return playstyleSystems;
-    return playstyleSystems.filter((s) =>
+    if (filter === "all") return nameFilteredSystems;
+    return nameFilteredSystems.filter((s) =>
       filter === "contested"
         ? s.contested !== "uncontested"
         : s.contested === "uncontested",
     );
-  }, [playstyleSystems, filter]);
+  }, [nameFilteredSystems, filter]);
 
   // Lay the tiles out as a top-down star map from real galactic X/Z coords
   // (x → horizontal, z → vertical, flipped so north is up), scaled to fit.
   const graphNodes: SystemGraphNode[] = useMemo(() => {
-    if (playstyleSystems.length === 0) return [];
-    const xs = playstyleSystems.map((s) => s.x);
-    const zs = playstyleSystems.map((s) => s.z);
+    if (nameFilteredSystems.length === 0) return [];
+    const xs = nameFilteredSystems.map((s) => s.x);
+    const zs = nameFilteredSystems.map((s) => s.z);
     const minX = Math.min(...xs);
     const maxX = Math.max(...xs);
     const minZ = Math.min(...zs);
     const maxZ = Math.max(...zs);
     const span = Math.max(maxX - minX, maxZ - minZ) || 1;
     const scale = 2800 / span;
-    const maxKills = Math.max(1, ...playstyleSystems.map((s) => s.kills));
+    const maxKills = Math.max(1, ...nameFilteredSystems.map((s) => s.kills));
     // Scale by real coords (x → horizontal, z → vertical, north up), then snap
     // to a grid so no two tiles overlap on first load.
     const placed = spreadNoOverlap(
-      playstyleSystems.map((n) => ({
+      nameFilteredSystems.map((n) => ({
         id: String(n.systemId),
         x: (n.x - minX) * scale,
         y: (maxZ - n.z) * scale,
@@ -949,7 +961,7 @@ function Warzone({
     // unchanged, both for readability at that node count and to avoid any
     // perf regression there.
     const detailed = radius !== "all";
-    return playstyleSystems.map((n) => {
+    return nameFilteredSystems.map((n) => {
       const p = placed.get(String(n.systemId)) ?? { x: 0, y: 0 };
       const hops = dist[String(n.systemId)];
       const isCurrent = n.systemId === characterSystemId;
@@ -1022,7 +1034,7 @@ function Warzone({
       };
     });
   }, [
-    playstyleSystems,
+    nameFilteredSystems,
     dist,
     characterSystemId,
     perspective,
@@ -1137,6 +1149,13 @@ function Warzone({
       {playstyle === "plexing" && perspective && (
         <PlexingIncomePanel militia={perspective.myFaction} />
       )}
+      <SearchFilterRow
+        value={nameQuery}
+        onChange={setNameQuery}
+        placeholder="Filter by system name…"
+        shown={nameFilteredSystems.length}
+        total={playstyleSystems.length}
+      />
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="text-xs text-zinc-500">Show</span>
         <div className="flex overflow-hidden rounded border border-zinc-700 text-sm">
@@ -1311,6 +1330,9 @@ function Warzone({
         <SystemGraph
           nodes={graphNodes}
           edges={graphEdges}
+          rootId={
+            characterSystemId != null ? String(characterSystemId) : undefined
+          }
           height={mapHeight}
           storageKey={`fw-map3-${zone}`}
         />

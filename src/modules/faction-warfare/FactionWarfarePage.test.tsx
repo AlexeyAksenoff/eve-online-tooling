@@ -131,6 +131,49 @@ describe("FW warzone list filter", () => {
   });
 });
 
+describe("FW name filter", () => {
+  it("hides non-matching systems from both the table and the map", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    expect(inTable().getByText("FightVille")).toBeInTheDocument();
+
+    const search = screen.getByPlaceholderText("Filter by system name…");
+    fireEvent.change(search, { target: { value: "fight" } });
+
+    await waitFor(() =>
+      expect(inTable().queryByText("QuietTown")).not.toBeInTheDocument(),
+    );
+    expect(inTable().getByText("FightVille")).toBeInTheDocument();
+    expect(inTable().queryByText("VulnBurg")).not.toBeInTheDocument();
+    expect(inTable().queryByText("RebelHold")).not.toBeInTheDocument();
+    // Not just the table — "QuietTown" shouldn't appear anywhere on the
+    // page (the star map renders node labels too), confirming the map is
+    // filtered along with the table.
+    expect(screen.queryByText("QuietTown")).not.toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "" } });
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    expect(inTable().getByText("VulnBurg")).toBeInTheDocument();
+  });
+
+  it("matches case-insensitively", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    const search = screen.getByPlaceholderText("Filter by system name…");
+    fireEvent.change(search, { target: { value: "QUIET" } });
+    await waitFor(() =>
+      expect(inTable().queryByText("FightVille")).not.toBeInTheDocument(),
+    );
+    expect(inTable().getByText("QuietTown")).toBeInTheDocument();
+  });
+});
+
 describe("FW playstyle presets (#904)", () => {
   it("PvP mode force-sorts the table by kills desc, ignoring the persisted sort", async () => {
     mockInvoke({
