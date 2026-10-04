@@ -51,6 +51,13 @@ import {
   type Perspective,
 } from "./factionPerspective";
 import { trendTier, trendTooltip, TREND_ARROW } from "./vpTrend";
+import {
+  factionSignedDelta,
+  formatVpDeltaPct,
+  loginDelta,
+  updateLoginBaselines,
+  type VpLoginBaseline,
+} from "./vpChange";
 import { nearestFriendlyFrontline } from "./frontlineRoute";
 import {
   computeFarmScores,
@@ -195,6 +202,8 @@ type FwSortKey =
   | "contestedRank"
   | "vpPct"
   | "vpVelocity"
+  | "vpDelta30mSigned"
+  | "vpDeltaLoginSigned"
   | "kills"
   | "npcKills"
   | "jumps"
@@ -210,6 +219,8 @@ const FW_SORT_KEYS: readonly FwSortKey[] = [
   "contestedRank",
   "vpPct",
   "vpVelocity",
+  "vpDelta30mSigned",
+  "vpDeltaLoginSigned",
   "kills",
   "npcKills",
   "jumps",
@@ -336,12 +347,36 @@ const FW_COLUMNS: SortColumn<FwSortKey>[] = [
   },
 ];
 
+/** Faction-signed VP%-change columns (perspective mode only — the sign
+ *  only means anything once "my militia" is defined): the backend's rolling
+ *  ~30-min sample history, and this session's own login-time baseline. See
+ *  `vpChange.ts`'s `factionSignedDelta` for the sign convention (positive =
+ *  progress for the selected militia, negative = progress for the enemy). */
+const VP_DELTA_30M_COLUMN: SortColumn<FwSortKey> = {
+  key: "vpDelta30mSigned",
+  label: "Δ 30m",
+  numeric: true,
+  description:
+    "VP% change in roughly the last 30 min, signed for your militia: positive is progress for you, negative is progress for the enemy. Blank until enough history exists.",
+};
+const VP_DELTA_LOGIN_COLUMN: SortColumn<FwSortKey> = {
+  key: "vpDeltaLoginSigned",
+  label: "Δ login",
+  numeric: true,
+  description:
+    "VP% change since you opened this session, signed for your militia: positive is progress for you, negative is progress for the enemy.",
+};
+
 /** {@link FW_COLUMNS} with the Defend/Push column inserted after "Controlled
- *  by" — used in place of {@link FW_COLUMNS} once a militia is selected. */
+ *  by", and the faction-signed Δ30m/Δ login columns inserted after "Trend" —
+ *  used in place of {@link FW_COLUMNS} once a militia is selected. */
 const FW_COLUMNS_PERSPECTIVE: SortColumn<FwSortKey>[] = [
   ...FW_COLUMNS.slice(0, 3),
   PERSPECTIVE_COLUMN,
-  ...FW_COLUMNS.slice(3),
+  ...FW_COLUMNS.slice(3, 7),
+  VP_DELTA_30M_COLUMN,
+  VP_DELTA_LOGIN_COLUMN,
+  ...FW_COLUMNS.slice(7),
 ];
 
 /** Plexing-mode-only column (#904), appended when that playstyle is active.
@@ -450,6 +485,19 @@ export function FactionWarfarePage() {
     queryFn: fwSystems,
     staleTime: 5 * 60_000,
   });
+
+  // "Since login" VP baseline: anchors every system's VP% the first time
+  // this app session observes it (or re-anchors on an ownership flip), so
+  // the Δ login column can show faction-signed progress since the session
+  // started. Lives at this top level (not per-Warzone) so switching
+  // warzones/perspectives never resets it.
+  const [loginBaseline, setLoginBaseline] = useState<
+    Map<number, VpLoginBaseline>
+  >(new Map());
+  useEffect(() => {
+    if (!map.data) return;
+    setLoginBaseline((prev) => updateLoginBaselines(prev, map.data.nodes));
+  }, [map.data]);
 
   // Warzones present in the data, in a stable order.
   const warzones = useMemo(() => {
@@ -700,7 +748,12 @@ export function FactionWarfarePage() {
       )}
 
       {map.data && activeZone && (
-        <Warzone data={map.data} zone={activeZone} perspective={perspective} />
+        <Warzone
+          data={map.data}
+          zone={activeZone}
+          perspective={perspective}
+          loginBaseline={loginBaseline}
+        />
       )}
     </Page>
   );
@@ -710,10 +763,12 @@ function Warzone({
   data,
   zone,
   perspective,
+  loginBaseline,
 }: {
   data: FwMap;
   zone: string;
   perspective: ActivePerspective;
+  loginBaseline: ReadonlyMap<number, VpLoginBaseline>;
 }) {
   const systems = useMemo(
     () => data.nodes.filter((n) => n.warzone === zone),
@@ -1180,6 +1235,7 @@ function Warzone({
         farmScores={farmScores}
         showFarmScore={playstyle === "plexing"}
         forcedSort={forcedSort}
+        loginBaseline={loginBaseline}
       />
 
       <div className="mt-4 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-zinc-400">
@@ -1316,6 +1372,14 @@ function PlexingIncomePanel({ militia }: { militia: MilitiaFactionId }) {
   );
 }
 
+/** Text colour for a faction-signed VP% delta cell: green when it's
+ *  progress for the selected militia, red when it's progress for the
+ *  enemy, muted zinc when flat or not yet known. */
+function vpDeltaClass(delta: number | null): string {
+  if (delta == null || Math.abs(delta) < 0.0005) return "text-zinc-500";
+  return delta > 0 ? "text-emerald-300" : "text-rose-300";
+}
+
 function SystemTable({
   systems,
   dist,
@@ -1324,6 +1388,7 @@ function SystemTable({
   farmScores,
   showFarmScore,
   forcedSort,
+  loginBaseline,
 }: {
   systems: FwSystemNode[];
   /** Hop counts keyed by String(systemId), from the active character's location. */
@@ -1337,6 +1402,8 @@ function SystemTable({
    *  farmScore desc. `undefined` in "all" mode uses the persisted user sort
    *  untouched — switching back to "all" resumes exactly where they left off. */
   forcedSort?: { key: FwSortKey; dir: "asc" | "desc" };
+  /** "Since login" VP baseline, for the Δ login column. */
+  loginBaseline: ReadonlyMap<number, VpLoginBaseline>;
 }) {
   const { sortKey, sortDir, toggleSort } = usePersistentSort<FwSortKey>(
     "sort.fw-systems",
@@ -1361,6 +1428,11 @@ function SystemTable({
       perspectiveRank: number;
       battlefieldRank: number;
       farmScore: number;
+      /** Faction-signed VP% change (positive = progress for the selected
+       *  militia) — distinct from the raw, occupier-centric `vpDelta30m` on
+       *  `FwSystemNode` itself. `null` outside perspective mode. */
+      vpDelta30mSigned: number | null;
+      vpDeltaLoginSigned: number | null;
     };
     const augmented: AugRow[] = systems.map((s) => {
       const persp = perspective
@@ -1374,11 +1446,28 @@ function SystemTable({
         perspectiveRank: PERSPECTIVE_RANK[persp ?? "none"],
         battlefieldRank: BATTLEFIELD_RANK[s.battlefield] ?? 2,
         farmScore: farmScores[s.systemId] ?? 0,
+        vpDelta30mSigned: perspective
+          ? factionSignedDelta(
+              s.vpDelta30m,
+              s.occupierId,
+              perspective.myFaction,
+            )
+          : null,
+        vpDeltaLoginSigned: perspective
+          ? factionSignedDelta(
+              loginDelta(loginBaseline, s.systemId, s.vpPct),
+              s.occupierId,
+              perspective.myFaction,
+            )
+          : null,
       };
     });
     return sortRows(augmented, effectiveSortKey, effectiveSortDir, {
       nullsLast:
-        effectiveSortKey === "hops" || effectiveSortKey === "vpVelocity",
+        effectiveSortKey === "hops" ||
+        effectiveSortKey === "vpVelocity" ||
+        effectiveSortKey === "vpDelta30mSigned" ||
+        effectiveSortKey === "vpDeltaLoginSigned",
     });
   }, [
     systems,
@@ -1387,6 +1476,7 @@ function SystemTable({
     effectiveSortDir,
     perspective,
     farmScores,
+    loginBaseline,
   ]);
 
   return (
@@ -1478,6 +1568,22 @@ function SystemTable({
                   return tier ? TREND_ARROW[tier] : "—";
                 })()}
               </td>
+              {perspective && (
+                <td
+                  className={`px-3 py-1.5 text-right tabular-nums ${vpDeltaClass(s.vpDelta30mSigned)}`}
+                  title="VP% change in roughly the last 30 min, signed for your militia: positive is progress for you, negative is progress for the enemy"
+                >
+                  {formatVpDeltaPct(s.vpDelta30mSigned)}
+                </td>
+              )}
+              {perspective && (
+                <td
+                  className={`px-3 py-1.5 text-right tabular-nums ${vpDeltaClass(s.vpDeltaLoginSigned)}`}
+                  title="VP% change since you opened this session, signed for your militia: positive is progress for you, negative is progress for the enemy"
+                >
+                  {formatVpDeltaPct(s.vpDeltaLoginSigned)}
+                </td>
+              )}
               <td
                 className={`px-3 py-1.5 text-right tabular-nums ${
                   s.kills > 0 ? "text-rose-300" : "text-zinc-600"

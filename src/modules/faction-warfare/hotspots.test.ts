@@ -20,6 +20,7 @@ function node(id: number, name: string): FwSystemNode {
     jumps: 0,
     battlefield: "frontline",
     vpVelocity: null,
+    vpDelta30m: null,
     x: 0,
     z: 0,
   };

@@ -29,6 +29,7 @@ function node(
     jumps: 0,
     battlefield: "frontline",
     vpVelocity: null,
+    vpDelta30m: null,
     x: 0,
     z: 0,
   };
