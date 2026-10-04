@@ -16,6 +16,7 @@ const PLAN: MassProductionPlan = {
       ownedCopies: 30,
       totalRuns: 300,
       assumed: null,
+      tier: "Tech II",
     },
   ],
   groups: [
@@ -36,6 +37,7 @@ const HYPOTHETICAL_PLAN: MassProductionPlan = {
       ownedCopies: 0,
       totalRuns: 1,
       assumed: { runs: 1, materialEfficiency: 0, specialEdition: true },
+      tier: "Faction",
     },
   ],
   groups: [
@@ -43,6 +45,27 @@ const HYPOTHETICAL_PLAN: MassProductionPlan = {
       groupName: "Mineral",
       categoryName: "Material",
       items: [{ typeId: 34, name: "Tritanium", quantity: 100 }],
+    },
+  ],
+};
+
+const MWD_PLAN: MassProductionPlan = {
+  unresolvedNames: [],
+  matchedBlueprints: [
+    {
+      name: "5MN Microwarpdrive II Blueprint",
+      typeId: 1073,
+      ownedCopies: 30,
+      totalRuns: 300,
+      assumed: null,
+      tier: "Tech II",
+    },
+  ],
+  groups: [
+    {
+      groupName: "Mineral",
+      categoryName: "Material",
+      items: [{ typeId: 11399, name: "Morphite", quantity: 5010 }],
     },
   ],
 };
@@ -80,9 +103,9 @@ describe("MassProductionPage", () => {
     expect(screen.getByText("Morphite")).toBeInTheDocument();
 
     expect(invokeMock).toHaveBeenCalledWith("massprod_plan", {
-      blueprintNames: [
-        "5MN Microwarpdrive II Blueprint",
-        "Not A Real Blueprint",
+      lines: [
+        { name: "5MN Microwarpdrive II Blueprint" },
+        { name: "Not A Real Blueprint" },
       ],
       mode: "owned",
       hypotheticalConfig: { t1Runs: 1, t1Me: 10, t2Me: 2 },
@@ -110,7 +133,7 @@ describe("MassProductionPage", () => {
     expect(screen.getByText("Special edition · ME0")).toBeInTheDocument();
 
     expect(invokeMock).toHaveBeenCalledWith("massprod_plan", {
-      blueprintNames: ["Republic Fleet Gyrostabilizer Blueprint"],
+      lines: [{ name: "Republic Fleet Gyrostabilizer Blueprint" }],
       mode: "hypothetical",
       hypotheticalConfig: { t1Runs: 1, t1Me: 10, t2Me: 2 },
     });
@@ -153,5 +176,137 @@ describe("MassProductionPage", () => {
       }),
     );
     expect(await screen.findByText("Saved ✓")).toBeInTheDocument();
+  });
+
+  it("groups the matched blueprints by tech tier", async () => {
+    const TIERED_PLAN: MassProductionPlan = {
+      unresolvedNames: [],
+      matchedBlueprints: [
+        {
+          name: "Widget I Blueprint",
+          typeId: 998,
+          ownedCopies: 5,
+          totalRuns: 5,
+          assumed: null,
+          tier: "Tech I",
+        },
+        MWD_PLAN.matchedBlueprints[0],
+      ],
+      groups: [],
+    };
+    mockInvoke({
+      sde_status: () => SDE_OK,
+      massprod_plan: () => TIERED_PLAN,
+    });
+    renderWithQuery(<MassProductionPage />);
+
+    await pasteAndImport("Widget I Blueprint\n5MN Microwarpdrive II Blueprint");
+
+    expect(await screen.findByText("Tech I")).toBeInTheDocument();
+    expect(screen.getByText("Tech II")).toBeInTheDocument();
+    expect(screen.getByText("Widget I Blueprint")).toBeInTheDocument();
+    expect(
+      screen.getByText("5MN Microwarpdrive II Blueprint"),
+    ).toBeInTheDocument();
+  });
+
+  it("edits a blueprint's build-runs and recomputes the plan with the override", async () => {
+    const overriddenPlan: MassProductionPlan = {
+      ...MWD_PLAN,
+      matchedBlueprints: [{ ...MWD_PLAN.matchedBlueprints[0], totalRuns: 50 }],
+    };
+    mockInvoke({
+      sde_status: () => SDE_OK,
+      massprod_plan: (args) => {
+        const { lines } = args as {
+          lines: { buildRuns?: number | null }[];
+        };
+        return lines.some((l) => l.buildRuns === 50)
+          ? overriddenPlan
+          : MWD_PLAN;
+      },
+    });
+    renderWithQuery(<MassProductionPage />);
+
+    await pasteAndImport("5MN Microwarpdrive II Blueprint");
+    const input = await screen.findByLabelText("Runs to build of 1073");
+    expect(input).toHaveValue(300);
+
+    fireEvent.change(input, { target: { value: "50" } });
+    fireEvent.blur(input);
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("massprod_plan", {
+        lines: [{ name: "5MN Microwarpdrive II Blueprint", buildRuns: 50 }],
+        mode: "owned",
+        hypotheticalConfig: { t1Runs: 1, t1Me: 10, t2Me: 2 },
+      }),
+    );
+    expect(await screen.findByLabelText("Runs to build of 1073")).toHaveValue(
+      50,
+    );
+  });
+
+  it("saves, loads, and deletes a build list", async () => {
+    const SAVED_LIST = {
+      id: "doctrine",
+      name: "Doctrine",
+      items: [
+        {
+          typeId: 1073,
+          name: "5MN Microwarpdrive II Blueprint",
+          buildRuns: 50,
+        },
+      ],
+    };
+    mockInvoke({
+      sde_status: () => SDE_OK,
+      massprod_plan: () => MWD_PLAN,
+      massprod_lists: () => [SAVED_LIST],
+      massprod_save_list: () => SAVED_LIST,
+      massprod_delete_list: () => undefined,
+    });
+    renderWithQuery(<MassProductionPage />);
+
+    await pasteAndImport("5MN Microwarpdrive II Blueprint");
+    await screen.findByText("Mineral");
+
+    fireEvent.click(screen.getByRole("button", { name: /Save build list/ }));
+    const nameInput = screen.getByPlaceholderText(/Build list/);
+    fireEvent.change(nameInput, { target: { value: "Doctrine" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("massprod_save_list", {
+        name: "Doctrine",
+        items: [{ typeId: 1073, buildRuns: null }],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Build lists" }));
+    const loadButton = await screen.findByTitle(
+      'Load "Doctrine" (1 blueprints)',
+    );
+    fireEvent.click(loadButton);
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("massprod_plan", {
+        lines: [{ name: "5MN Microwarpdrive II Blueprint", buildRuns: 50 }],
+        mode: "owned",
+        hypotheticalConfig: { t1Runs: 1, t1Me: 10, t2Me: 2 },
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Build lists" }));
+    const deleteButton = await screen.findByRole("button", {
+      name: "Delete Doctrine",
+    });
+    fireEvent.click(deleteButton);
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("massprod_delete_list", {
+        id: "doctrine",
+      }),
+    );
   });
 });

@@ -1,16 +1,28 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ClipboardCopy } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ClipboardCopy,
+  FolderOpen,
+  RotateCcw,
+  Save,
+  Trash2,
+} from "lucide-react";
 
 import {
   errorMessage,
   isAuthRequired,
+  massprodDeleteList,
+  massprodLists,
   massprodPlan,
+  massprodSaveList,
   shoppingAddItem,
   shoppingCreateList,
   DEFAULT_HYPOTHETICAL_CONFIG,
+  type BlueprintLine,
+  type BuildList,
   type HypotheticalConfig,
   type MassProductionPlan,
+  type MatchedBlueprint,
   type MaterialGroup,
   type PlanMode,
 } from "../../lib/api";
@@ -27,6 +39,10 @@ const TITLE = "Mass Production";
 const SUBTITLE =
   "Paste blueprints and get a categorized shopping list to run all of them — matched against what the roster/corp actually own, or a rule-derived assumption in Hypothetical mode.";
 
+/** Query key for saved build lists — scoped to this file; nothing else in
+ *  the app reads or invalidates it. */
+const MASSPROD_LISTS_KEY = ["massprod", "lists"] as const;
+
 export function MassProductionPage() {
   return (
     <SdeGate title={TITLE} subtitle={SUBTITLE}>
@@ -42,10 +58,15 @@ function Workbench() {
     useState<HypotheticalConfig>(DEFAULT_HYPOTHETICAL_CONFIG);
   const [plan, setPlan] = useState<MassProductionPlan | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
+  /** Per-blueprint "how many should be built" overrides, keyed by type id —
+   *  absent means "use the mode's computed default". Mirrored into every
+   *  `massprodPlan` call's `BlueprintLine.buildRuns` so a row's edit
+   *  actually recomputes the materials below it. */
+  const [overrides, setOverrides] = useState<Record<number, number>>({});
 
   const build = useMutation({
-    mutationFn: (blueprintNames: string[]) =>
-      massprodPlan(blueprintNames, mode, hypotheticalConfig),
+    mutationFn: (lines: BlueprintLine[]) =>
+      massprodPlan(lines, mode, hypotheticalConfig),
     onSuccess: (result) => {
       setPlan(result);
       setPlanError(null);
@@ -65,7 +86,44 @@ function Workbench() {
       .map((l) => l.trim())
       .filter((l) => l.length > 0);
     if (names.length === 0) return;
-    build.mutate(names);
+    setOverrides({});
+    build.mutate(names.map((name) => ({ name })));
+  }
+
+  /** A `BuildRunsCell` edit: set or clear one blueprint's override, then
+   *  recompute the plan with every other matched/unresolved line carried
+   *  forward unchanged (by resolved name, so the backend re-resolves the
+   *  exact same type). Clearing an override lets the backend recompute
+   *  that line's natural default instead of pinning it. */
+  function commitBuildRuns(typeId: number, value: number | null) {
+    if (plan == null) return;
+    const nextOverrides = { ...overrides };
+    if (value == null) delete nextOverrides[typeId];
+    else nextOverrides[typeId] = value;
+    setOverrides(nextOverrides);
+
+    const lines: BlueprintLine[] = [
+      ...plan.matchedBlueprints.map((b) => ({
+        name: b.name,
+        buildRuns: nextOverrides[b.typeId] ?? null,
+      })),
+      ...plan.unresolvedNames.map((name) => ({ name })),
+    ];
+    build.mutate(lines);
+  }
+
+  /** Load a saved build list: repopulate the paste box for visibility/edit,
+   *  restore its saved per-line overrides, and recompute immediately. */
+  function loadBuildList(list: BuildList) {
+    setText(list.items.map((i) => i.name).join("\n"));
+    const restored: Record<number, number> = {};
+    for (const item of list.items) {
+      if (item.buildRuns != null) restored[item.typeId] = item.buildRuns;
+    }
+    setOverrides(restored);
+    build.mutate(
+      list.items.map((i) => ({ name: i.name, buildRuns: i.buildRuns })),
+    );
   }
 
   return (
@@ -86,6 +144,11 @@ function Workbench() {
               onImport={importNames}
               pending={build.isPending}
             />
+            <BuildListsPanel
+              plan={plan}
+              overrides={overrides}
+              onLoad={loadBuildList}
+            />
           </div>
           <InlineError message={planError} className="text-xs text-rose-400" />
           {mode === "hypothetical" && (
@@ -101,7 +164,12 @@ function Workbench() {
             Paste a list of blueprint names to build a plan.
           </div>
         ) : (
-          <PlanResult plan={plan} mode={mode} />
+          <PlanResult
+            plan={plan}
+            mode={mode}
+            overrides={overrides}
+            onCommitBuildRuns={commitBuildRuns}
+          />
         )}
       </div>
     </Page>
@@ -161,7 +229,7 @@ function HypotheticalSettingsRow({
     <div className="flex flex-wrap items-end gap-4 rounded border border-zinc-800 bg-zinc-900/60 px-3 py-2">
       <Field
         label="T1 assumed runs"
-        title="Assumed run count for every T1 (and special-edition) blueprint pasted"
+        title="Default run count for a T1 (and special-edition) blueprint pasted with no per-row override"
       >
         <input
           type="number"
@@ -202,21 +270,220 @@ function HypotheticalSettingsRow({
       </Field>
       <div className="text-xs text-zinc-500">
         T2 runs always come from each blueprint's own SDE run cap (
-        <code>maxProductionLimit</code>) — not configurable. Faction/Officer/
-        Deadspace items always assume ME0, flagged below.
+        <code>maxProductionLimit</code>) unless overridden per row below.
+        Faction/Officer/Deadspace items always assume ME0, flagged below.
       </div>
     </div>
   );
 }
 
+/** "Build lists ▾" — save the current matched blueprints (with their build-
+ * run overrides) under a name, or load/delete a previously saved one.
+ * Separate from Shopping Lists: a build list is the *input* (blueprints +
+ * how many to build), not the computed materials. */
+function BuildListsPanel({
+  plan,
+  overrides,
+  onLoad,
+}: {
+  plan: MassProductionPlan | null;
+  overrides: Record<number, number>;
+  onLoad: (list: BuildList) => void;
+}) {
+  const qc = useQueryClient();
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const listsQuery = useQuery({
+    queryKey: MASSPROD_LISTS_KEY,
+    queryFn: massprodLists,
+    enabled: browseOpen,
+  });
+
+  const save = useMutation({
+    mutationFn: (listName: string) =>
+      massprodSaveList(
+        listName,
+        (plan?.matchedBlueprints ?? []).map((b) => ({
+          typeId: b.typeId,
+          buildRuns: overrides[b.typeId] ?? null,
+        })),
+      ),
+    onSuccess: () => {
+      setSaveOpen(false);
+      setName("");
+      setSaveError(null);
+      void qc.invalidateQueries({ queryKey: MASSPROD_LISTS_KEY });
+    },
+    onError: (e) => setSaveError(errorMessage(e)),
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => massprodDeleteList(id),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: MASSPROD_LISTS_KEY }),
+  });
+
+  const canSave = plan != null && plan.matchedBlueprints.length > 0;
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className="relative">
+        <button
+          onClick={() => {
+            setBrowseOpen((o) => !o);
+            setSaveOpen(false);
+          }}
+          className="flex items-center gap-1.5 rounded border border-zinc-700 px-2 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
+        >
+          <FolderOpen size={13} />
+          Build lists
+        </button>
+        {browseOpen && (
+          <>
+            <div
+              className="fixed inset-0 z-10"
+              onClick={() => setBrowseOpen(false)}
+            />
+            <div className="absolute left-0 z-20 mt-1 w-72 rounded border border-zinc-700 bg-zinc-900 p-2 shadow-lg">
+              {listsQuery.isLoading && (
+                <div className="px-2 py-1 text-xs text-zinc-500">Loading…</div>
+              )}
+              {listsQuery.data?.length === 0 && (
+                <div className="px-2 py-1 text-xs text-zinc-500">
+                  No saved build lists yet.
+                </div>
+              )}
+              {listsQuery.data?.map((list) => (
+                <div
+                  key={list.id}
+                  className="flex items-center justify-between gap-2 rounded px-2 py-1 hover:bg-zinc-800"
+                >
+                  <button
+                    onClick={() => {
+                      onLoad(list);
+                      setBrowseOpen(false);
+                    }}
+                    className="flex-1 truncate text-left text-xs text-zinc-200"
+                    title={`Load "${list.name}" (${list.items.length} blueprints)`}
+                  >
+                    {list.name}
+                    <span className="ml-1.5 text-zinc-500">
+                      ({list.items.length})
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => remove.mutate(list.id)}
+                    aria-label={`Delete ${list.name}`}
+                    title="Delete this build list"
+                    className="shrink-0 text-zinc-500 hover:text-rose-400"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {canSave && (
+        <div className="relative">
+          <button
+            onClick={() => {
+              setSaveOpen((o) => !o);
+              setBrowseOpen(false);
+            }}
+            className="flex items-center gap-1.5 rounded border border-zinc-700 px-2 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
+          >
+            <Save size={13} />
+            {save.isSuccess && !saveOpen ? "Saved ✓" : "Save build list…"}
+          </button>
+          {saveOpen && (
+            <>
+              <div
+                className="fixed inset-0 z-10"
+                onClick={() => setSaveOpen(false)}
+              />
+              <div className="absolute left-0 z-20 mt-1 w-64 rounded border border-zinc-700 bg-zinc-900 p-2 shadow-lg">
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && name.trim())
+                      save.mutate(name.trim());
+                  }}
+                  placeholder={`Build list — ${new Date().toLocaleDateString()}`}
+                  autoFocus
+                  className="w-full rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-100 outline-none placeholder:text-zinc-500"
+                />
+                <div className="mt-2 flex justify-end gap-2">
+                  <button
+                    onClick={() => setSaveOpen(false)}
+                    className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => name.trim() && save.mutate(name.trim())}
+                    disabled={name.trim().length === 0 || save.isPending}
+                    className="rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+                  >
+                    {save.isPending ? "Saving…" : "Save"}
+                  </button>
+                </div>
+                <InlineError
+                  message={saveError}
+                  className="mt-1 text-xs text-rose-400"
+                />
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Priority order a tier group renders in — standard tech levels first
+ *  (matching how players think about a mixed doctrine paste), then
+ *  everything else (Faction/Officer/Deadspace) alphabetically. */
+const TIER_PRIORITY: Record<string, number> = { "Tech I": 0, "Tech II": 1 };
+
+/** Buckets matched blueprints by their SDE meta-group tier (e.g. "all T1
+ *  base items into one group") — mirrors the materials-side grouping below,
+ *  applied to the input blueprint list instead of the output materials. */
+function groupByTier(
+  blueprints: MatchedBlueprint[],
+): { tier: string; items: MatchedBlueprint[] }[] {
+  const byTier = new Map<string, MatchedBlueprint[]>();
+  for (const b of blueprints) {
+    const existing = byTier.get(b.tier);
+    if (existing) existing.push(b);
+    else byTier.set(b.tier, [b]);
+  }
+  return [...byTier.entries()]
+    .map(([tier, items]) => ({ tier, items }))
+    .sort((a, b) => {
+      const pa = TIER_PRIORITY[a.tier] ?? 2;
+      const pb = TIER_PRIORITY[b.tier] ?? 2;
+      return pa !== pb ? pa - pb : a.tier.localeCompare(b.tier);
+    });
+}
+
 function PlanResult({
   plan,
   mode,
+  overrides,
+  onCommitBuildRuns,
 }: {
   plan: MassProductionPlan;
   mode: PlanMode;
+  overrides: Record<number, number>;
+  onCommitBuildRuns: (typeId: number, value: number | null) => void;
 }) {
-  const runsHeader = mode === "hypothetical" ? "Assumed runs" : "Total runs";
   const copiesHeader = mode === "hypothetical" ? "Assumed ME" : "Owned copies";
 
   return (
@@ -228,17 +495,85 @@ function PlanResult({
         </div>
       )}
 
-      <div className="overflow-auto rounded border border-zinc-800">
+      {plan.matchedBlueprints.length === 0 ? (
+        <div className="rounded border border-zinc-800 px-3 py-3 text-center text-sm text-zinc-500">
+          No blueprint names resolved.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {groupByTier(plan.matchedBlueprints).map((g) => (
+            <TierSection
+              key={g.tier}
+              tier={g.tier}
+              blueprints={g.items}
+              mode={mode}
+              copiesHeader={copiesHeader}
+              overrides={overrides}
+              onCommitBuildRuns={onCommitBuildRuns}
+            />
+          ))}
+        </div>
+      )}
+
+      {plan.groups.length === 0 ? (
+        <div className="text-sm text-zinc-500">
+          {mode === "hypothetical"
+            ? "No resolved blueprints — nothing to buy."
+            : "No owned copies of the pasted blueprints — nothing to buy."}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {plan.groups.map((g) => (
+            <GroupSection key={g.groupName} group={g} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One tech-tier bucket of the pasted blueprint list (e.g. "Tech I") — a
+ * collapsible table, same chrome as the materials `GroupSection` below. */
+function TierSection({
+  tier,
+  blueprints,
+  mode,
+  copiesHeader,
+  overrides,
+  onCommitBuildRuns,
+}: {
+  tier: string;
+  blueprints: MatchedBlueprint[];
+  mode: PlanMode;
+  copiesHeader: string;
+  overrides: Record<number, number>;
+  onCommitBuildRuns: (typeId: number, value: number | null) => void;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  return (
+    <div className="rounded border border-zinc-800">
+      <button
+        onClick={() => setCollapsed((c) => !c)}
+        className="flex w-full items-center gap-2 border-b border-zinc-800 bg-zinc-900 px-3 py-2 text-left text-sm font-medium text-zinc-200"
+      >
+        <span className="text-zinc-500">{collapsed ? "▸" : "▾"}</span>
+        {tier}
+        <span className="text-xs font-normal text-zinc-500">
+          ({blueprints.length} blueprint{blueprints.length === 1 ? "" : "s"})
+        </span>
+      </button>
+      {!collapsed && (
         <table className="w-full border-collapse text-sm">
-          <thead className="bg-zinc-900 text-zinc-400">
+          <thead className="bg-zinc-900/60 text-zinc-400">
             <tr>
               <th className="px-3 py-1.5 text-left">Blueprint</th>
               <th className="px-3 py-1.5 text-right">{copiesHeader}</th>
-              <th className="px-3 py-1.5 text-right">{runsHeader}</th>
+              <th className="px-3 py-1.5 text-right">Runs to build</th>
             </tr>
           </thead>
           <tbody>
-            {plan.matchedBlueprints.map((b) => (
+            {blueprints.map((b) => (
               <tr key={b.typeId} className="border-t border-zinc-800">
                 <td className="px-3 py-1.5 text-zinc-200">
                   {b.name}
@@ -257,33 +592,79 @@ function PlanResult({
                     : formatInt(b.ownedCopies)}
                 </td>
                 <td className="px-3 py-1.5 text-right text-zinc-300">
-                  {formatInt(b.totalRuns)}
+                  <BuildRunsCell
+                    typeId={b.typeId}
+                    totalRuns={b.totalRuns}
+                    overridden={overrides[b.typeId] != null}
+                    onCommit={onCommitBuildRuns}
+                  />
                 </td>
               </tr>
             ))}
-            {plan.matchedBlueprints.length === 0 && (
-              <tr>
-                <td colSpan={3} className="px-3 py-3 text-center text-zinc-500">
-                  No blueprint names resolved.
-                </td>
-              </tr>
-            )}
           </tbody>
         </table>
-      </div>
+      )}
+    </div>
+  );
+}
 
-      {plan.groups.length === 0 ? (
-        <div className="text-sm text-zinc-500">
-          {mode === "hypothetical"
-            ? "No resolved blueprints — nothing to buy."
-            : "No owned copies of the pasted blueprints — nothing to buy."}
-        </div>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {plan.groups.map((g) => (
-            <GroupSection key={g.groupName} group={g} />
-          ))}
-        </div>
+/** Editable "how many should be built" cell (#NNN) — keeps a local draft
+ * while typing and commits once on blur/Enter, the same debounce-free
+ * pattern Shopping Lists' quantity cells use, so a mid-edit keystroke never
+ * fires a recompute. An empty commit clears the override, falling back to
+ * the mode's computed default (real owned total, or the rule-derived
+ * Hypothetical assumption); the ↺ button does the same in one click. */
+function BuildRunsCell({
+  typeId,
+  totalRuns,
+  overridden,
+  onCommit,
+}: {
+  typeId: number;
+  totalRuns: number;
+  overridden: boolean;
+  onCommit: (typeId: number, value: number | null) => void;
+}) {
+  // null = not editing → show the plan's current (server-computed) value.
+  const [draft, setDraft] = useState<string | null>(null);
+
+  function commit() {
+    if (draft === null) return;
+    setDraft(null);
+    const trimmed = draft.trim();
+    if (trimmed === "") {
+      if (overridden) onCommit(typeId, null);
+      return;
+    }
+    const n = Number(trimmed);
+    if (!Number.isFinite(n)) return;
+    const next = Math.max(0, Math.round(n));
+    if (next !== totalRuns || !overridden) onCommit(typeId, next);
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-1">
+      <input
+        type="number"
+        min={0}
+        value={draft ?? totalRuns}
+        aria-label={`Runs to build of ${typeId}`}
+        onChange={(e) => setDraft(e.currentTarget.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          else if (e.key === "Escape") setDraft(null);
+        }}
+        className="w-20 rounded bg-zinc-800 px-2 py-0.5 text-right text-zinc-100 outline-none"
+      />
+      {overridden && (
+        <button
+          onClick={() => onCommit(typeId, null)}
+          title="Reset to the computed default"
+          className="text-zinc-500 hover:text-zinc-300"
+        >
+          <RotateCcw size={12} />
+        </button>
       )}
     </div>
   );

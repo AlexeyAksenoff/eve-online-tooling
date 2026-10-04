@@ -66,6 +66,19 @@ fn default_t2_me() -> i64 {
     BASE_T2_ME
 }
 
+/// One pasted "blueprint to build" line: a name plus an optional explicit
+/// build-run override — lets a user say "build exactly N runs of this"
+/// instead of accepting the mode's default (the rule-derived Hypothetical
+/// assumption, or the full real Owned total). `None`/absent keeps that
+/// default unchanged.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlueprintLine {
+    pub name: String,
+    #[serde(default)]
+    pub build_runs: Option<i64>,
+}
+
 /// The rule-derived `(runs, ME)` Hypothetical mode assumed for one pasted
 /// blueprint (#893), plus whether the special-edition ME0 rule fired —
 /// surfaced so the UI can visibly flag it (so the user knows a different
@@ -103,6 +116,12 @@ pub struct MatchedBlueprint {
     /// for this line. `None` in Owned mode, where those fields are real ESI
     /// data (#893).
     pub assumed: Option<AssumedBlueprint>,
+    /// The blueprint product's meta-group tier — "Tech I", "Tech II",
+    /// "Faction", "Officer", or "Deadspace" (absent from `invMetaTypes`
+    /// defaults to "Tech I", the SDE's own convention) — so the UI can
+    /// group a long pasted list by tier, the same way Hypothetical mode
+    /// already classifies it for the assumption rules.
+    pub tier: String,
 }
 
 /// One material line inside a [`MaterialGroup`].
@@ -174,39 +193,107 @@ fn stack_count(quantity: i64) -> i64 {
     }
 }
 
-/// Resolved blueprint names: pasted-line resolution order (type ids, first
-/// seen), the resolved name for each, and every pasted line that resolved to
-/// nothing.
-type ResolvedBlueprintNames = (Vec<i64>, HashMap<i64, String>, Vec<String>);
+/// Resolved blueprint lines: pasted-line resolution order (type ids, first
+/// seen), the resolved name for each, each type's build-run override (from
+/// the first-seen line only, same dedup convention as the name), and every
+/// pasted line that resolved to nothing.
+type ResolvedBlueprintLines = (
+    Vec<i64>,
+    HashMap<i64, String>,
+    HashMap<i64, Option<i64>>,
+    Vec<String>,
+);
 
 /// Resolve every pasted line to an SDE type id, in first-seen order,
 /// de-duplicating repeated names (case/whitespace already normalized by
-/// `type_by_name`'s case-insensitive match). Blank lines are skipped. Lines
-/// that don't resolve to any type are returned as `unresolved_names`, the
-/// same reporting shape `shopping_add_text` already uses.
-fn resolve_blueprint_names(
+/// `type_by_name`'s case-insensitive match) — a later duplicate's
+/// `build_runs` is ignored along with the rest of its line, same as before.
+/// Blank names are skipped. Lines that don't resolve to any type are
+/// returned as `unresolved_names`, the same reporting shape
+/// `shopping_add_text` already uses.
+fn resolve_blueprint_lines(
     sde: &crate::sde::Sde,
-    blueprint_names: &[String],
-) -> Result<ResolvedBlueprintNames, String> {
+    lines: &[BlueprintLine],
+) -> Result<ResolvedBlueprintLines, String> {
     let mut order = Vec::new();
     let mut names: HashMap<i64, String> = HashMap::new();
+    let mut build_runs: HashMap<i64, Option<i64>> = HashMap::new();
     let mut unresolved = Vec::new();
-    for raw in blueprint_names {
-        let line = raw.trim();
-        if line.is_empty() {
+    for line in lines {
+        let trimmed = line.name.trim();
+        if trimmed.is_empty() {
             continue;
         }
-        match sde.type_by_name(line).map_err(|e| e.to_string())? {
+        match sde.type_by_name(trimmed).map_err(|e| e.to_string())? {
             Some((type_id, _volume)) => {
                 if let std::collections::hash_map::Entry::Vacant(e) = names.entry(type_id) {
                     order.push(type_id);
                     e.insert(sde.type_name_or_id(type_id));
+                    build_runs.insert(type_id, line.build_runs);
                 }
             }
-            None => unresolved.push(raw.clone()),
+            None => unresolved.push(line.name.clone()),
         }
     }
-    Ok((order, names, unresolved))
+    Ok((order, names, build_runs, unresolved))
+}
+
+/// The blueprint PRODUCT's meta-group tier — "Tech I", "Tech II",
+/// "Faction", "Officer", or "Deadspace" (absent from `invMetaTypes`
+/// defaults to "Tech I", the SDE's own convention). Shared by
+/// `assume_blueprint`'s Hypothetical-mode rule classification and
+/// `massprod_plan`'s build-list grouping, so a blueprint's displayed tier
+/// always lines up with the rule that was (or would be) applied to it.
+fn product_tier(
+    sde: &crate::sde::Sde,
+    meta_group_names: &crate::sde::NameMap,
+    blueprint_type_id: i64,
+) -> Result<String, String> {
+    let product_type_id = sde
+        .blueprint_product(blueprint_type_id)
+        .map_err(|e| e.to_string())?
+        .map(|p| p.product_type_id)
+        .unwrap_or(blueprint_type_id);
+    Ok(meta_group_names
+        .get(&product_type_id)
+        .cloned()
+        .unwrap_or_else(|| "Tech I".to_string()))
+}
+
+/// Caps a blueprint's owned `(runs, me, count)` stacks down to at most
+/// `cap` total runs (a per-line "how many to build" override in Owned
+/// mode) — consuming the stacks in the order given (callers sort by ME
+/// descending so the cheapest-material copies are used first) and, if the
+/// cap falls inside a stack, splitting off a single partial-run copy so the
+/// cap is hit exactly without ever overshooting. Every kept copy still uses
+/// its own real `(runs, me)` — this never averages across differently-
+/// propertied copies, just chooses which whole/partial copies to include. A
+/// `cap` at or beyond the natural total is a no-op (every stack kept
+/// unchanged); a `cap` of `0` or below drops everything.
+fn cap_to_runs(copies: Vec<(i64, i64, i64)>, cap: i64) -> Vec<(i64, i64, i64)> {
+    let mut remaining = cap.max(0);
+    let mut kept = Vec::with_capacity(copies.len());
+    for (runs, me, count) in copies {
+        if remaining <= 0 || runs <= 0 || count <= 0 {
+            continue;
+        }
+        let stack_total = runs * count;
+        if stack_total <= remaining {
+            kept.push((runs, me, count));
+            remaining -= stack_total;
+            continue;
+        }
+        let whole = remaining / runs;
+        if whole > 0 {
+            kept.push((runs, me, whole));
+            remaining -= whole * runs;
+        }
+        if remaining > 0 {
+            kept.push((remaining, me, 1));
+            remaining = 0;
+        }
+    }
+    kept
 }
 
 /// Rule-derived `(runs, ME)` for one pasted blueprint in Hypothetical mode
@@ -280,18 +367,27 @@ fn assume_blueprint(
 /// materials are summed per owned/assumed copy — never averaged across
 /// copies at different ME/runs — and bucketed by `invGroups.groupName` into
 /// Multibuy-ready shopping groups.
+///
+/// Each pasted line may carry an explicit `build_runs` override: in
+/// Hypothetical mode it replaces the rule-derived assumed run count for
+/// that one blueprint; in Owned mode it caps the real owned total down to
+/// that many runs, consuming the best-ME copies first (see
+/// [`cap_to_runs`]). Every matched blueprint is also tagged with its
+/// product's tier ([`product_tier`]) so the UI can group a long pasted list
+/// by tech level.
 #[tauri::command]
 pub async fn massprod_plan(
     app: AppHandle,
     auth_state: State<'_, AuthState>,
-    blueprint_names: Vec<String>,
+    lines: Vec<BlueprintLine>,
     mode: PlanMode,
     hypothetical_config: Option<HypotheticalConfig>,
 ) -> Result<MassProductionPlan, crate::model::AppError> {
     let hypothetical_config = hypothetical_config.unwrap_or_default();
     let (dir, sde) = crate::sde::dir_and_sde(&app)?;
 
-    let (order, names, unresolved_names) = resolve_blueprint_names(&sde, &blueprint_names)?;
+    let (order, names, build_runs, unresolved_names) = resolve_blueprint_lines(&sde, &lines)?;
+    let meta = crate::sde::cached_meta_group_names(&dir)?;
 
     // Each resolved blueprint's `(runs, ME, count)` stacks to sum materials
     // over: real ESI-owned copies in Owned mode, or one synthetic assumed
@@ -312,9 +408,11 @@ pub async fn massprod_plan(
             }
         }
         PlanMode::Hypothetical => {
-            let meta = crate::sde::cached_meta_group_names(&dir)?;
             for &type_id in &order {
-                let assumed = assume_blueprint(&sde, &meta, type_id, &hypothetical_config)?;
+                let mut assumed = assume_blueprint(&sde, &meta, type_id, &hypothetical_config)?;
+                if let Some(Some(cap)) = build_runs.get(&type_id) {
+                    assumed.runs = (*cap).max(0);
+                }
                 copies_by_type.insert(
                     type_id,
                     vec![(assumed.runs, assumed.material_efficiency, 1)],
@@ -328,7 +426,15 @@ pub async fn massprod_plan(
     let mut material_totals: HashMap<i64, i64> = HashMap::new();
 
     for type_id in &order {
-        let copies = copies_by_type.get(type_id).cloned().unwrap_or_default();
+        let mut copies = copies_by_type.get(type_id).cloned().unwrap_or_default();
+        if mode == PlanMode::Owned {
+            if let Some(Some(cap)) = build_runs.get(type_id) {
+                // Best ME (cheapest material use) first, so a capped build
+                // always consumes the most efficient owned copies.
+                copies.sort_by_key(|&(_, me, _)| std::cmp::Reverse(me));
+                copies = cap_to_runs(copies, *cap);
+            }
+        }
         let owned_copies: i64 = copies
             .iter()
             .filter(|&&(runs, _, _)| runs > 0)
@@ -346,6 +452,7 @@ pub async fn massprod_plan(
             owned_copies,
             total_runs,
             assumed: assumed_by_type.get(type_id).copied(),
+            tier: product_tier(&sde, &meta, *type_id)?,
         });
 
         if owned_copies > 0 {
@@ -557,5 +664,33 @@ mod tests {
         // T2 runs still come from the SDE's own maxProductionLimit, not the
         // T1 run override — only ME is configurable for T2.
         assert_eq!(t2.runs, 10);
+    }
+
+    #[test]
+    fn cap_to_runs_below_natural_total_consumes_best_me_first() {
+        // 3 copies at ME10/10runs (best), 2 copies at ME0/10runs (worst) —
+        // 50 runs owned total. Capping to 25 should take the 3 best-ME
+        // copies whole (30 runs) ... wait that overshoots; it should take
+        // 2 whole best-ME copies (20 runs) then split a 5-run partial off
+        // the third best-ME copy, never touching the worse-ME copies.
+        let copies = vec![(10, 10, 3), (10, 0, 2)];
+        let capped = cap_to_runs(copies, 25);
+        assert_eq!(capped, vec![(10, 10, 2), (5, 10, 1)]);
+        let total: i64 = capped.iter().map(|&(runs, _, count)| runs * count).sum();
+        assert_eq!(total, 25);
+    }
+
+    #[test]
+    fn cap_to_runs_at_or_above_natural_total_is_a_no_op() {
+        let copies = vec![(10, 10, 3), (5, 0, 2)];
+        assert_eq!(cap_to_runs(copies.clone(), 40), copies);
+        assert_eq!(cap_to_runs(copies.clone(), 1000), copies);
+    }
+
+    #[test]
+    fn cap_to_runs_zero_or_negative_drops_everything() {
+        let copies = vec![(10, 10, 3)];
+        assert!(cap_to_runs(copies.clone(), 0).is_empty());
+        assert!(cap_to_runs(copies, -5).is_empty());
     }
 }
