@@ -74,13 +74,10 @@ import {
   plexingIskPerHour,
 } from "./lpEstimate";
 import {
-  HEAT_LAYER_OPTIONS,
-  heatBg,
-  heatCount,
   hotspotDescription,
+  hotspotHeatBg,
   hotspotTotal,
   NO_HOTSPOT_ACTIVITY,
-  type HeatLayer,
 } from "./hotspots";
 
 /** The militia picker's selection: Observer (neutral, today's view) or one
@@ -495,15 +492,31 @@ function useFillHeight(
 // coloured by who holds them) and a per-system table with contest state and
 // last-hour activity. Public data, no login required.
 export function FactionWarfarePage() {
+  // Auto refresh (persisted, opt-in — zKill/ESI calls aren't free): while
+  // on, re-polls every 60s and forces a fresh fetch on mount instead of
+  // only refetching once staleTime lapses, for every FW query on the page
+  // (militia stats, the warzone map, and — passed down to `Warzone` —
+  // kill hotspots). `useQuery`'s own lifecycle confines this to "while the
+  // page is open": the interval stops the moment the component unmounts,
+  // and React Query additionally pauses it while the window isn't
+  // focused, so there's no separate "is the module active" check needed.
+  const [autoRefresh, setAutoRefresh] = usePersistentState(
+    "fw.autoRefresh",
+    false,
+  );
   const stats = useQuery({
     queryKey: ["intel", "fw"],
     queryFn: intelFwStats,
     staleTime: 10 * 60_000,
+    refetchInterval: autoRefresh ? 60_000 : false,
+    refetchOnMount: autoRefresh ? "always" : true,
   });
   const map = useQuery({
     queryKey: ["intel", "fwSystems"],
     queryFn: fwSystems,
     staleTime: 5 * 60_000,
+    refetchInterval: autoRefresh ? 60_000 : false,
+    refetchOnMount: autoRefresh ? "always" : true,
   });
 
   // "Since login" VP baseline: anchors every system's VP% the first time
@@ -596,16 +609,26 @@ export function FactionWarfarePage() {
         title="Faction warfare"
         subtitle="Warzone control map and per-system state. Public data, no login required."
         actions={
-          <button
-            onClick={() => {
-              stats.refetch();
-              map.refetch();
-            }}
-            disabled={map.isFetching}
-            className="rounded border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
-          >
-            {map.isFetching ? "Loading…" : "Refresh"}
-          </button>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1.5 text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={autoRefresh}
+                onChange={(e) => setAutoRefresh(e.currentTarget.checked)}
+              />
+              Auto refresh (1 min)
+            </label>
+            <button
+              onClick={() => {
+                stats.refetch();
+                map.refetch();
+              }}
+              disabled={map.isFetching}
+              className="rounded border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+            >
+              {map.isFetching ? "Loading…" : "Refresh"}
+            </button>
+          </div>
         }
       />
 
@@ -773,6 +796,7 @@ export function FactionWarfarePage() {
           zone={activeZone}
           perspective={perspective}
           loginBaseline={loginBaseline}
+          autoRefresh={autoRefresh}
         />
       )}
     </Page>
@@ -784,11 +808,15 @@ function Warzone({
   zone,
   perspective,
   loginBaseline,
+  autoRefresh,
 }: {
   data: FwMap;
   zone: string;
   perspective: ActivePerspective;
   loginBaseline: ReadonlyMap<number, VpLoginBaseline>;
+  /** Page-level auto-refresh: drives the hotspots query's 60s refetch too,
+   *  so "everything, including heat" updates together. */
+  autoRefresh: boolean;
 }) {
   const systems = useMemo(
     () => data.nodes.filter((n) => n.warzone === zone),
@@ -901,25 +929,13 @@ function Warzone({
     return playstyleSystems.filter((s) => s.name.toLowerCase().includes(q));
   }, [playstyleSystems, nameQuery]);
 
-  // Kill hotspots (#905): zKillboard faction-scoped feeds bucketed into
-  // friendly/enemy/cartel per system, over the last ~6h — a heat layer
-  // toggle on the map, mutually exclusive with the default kill-heat tint.
-  // Requires a militia selection (Observer has no "friendly"/"enemy").
-  const [heatLayer, setHeatLayer] = usePersistentState<HeatLayer>(
-    "fw.heatLayer",
-    "off",
-  );
-  // Auto-update toggle, persisted and opt-in (zKill/ESI calls aren't free):
-  // while on, re-polls every 60s and forces a fresh fetch whenever this
-  // page (re)mounts, instead of only refetching once the 5-min staleTime
-  // lapses. `useQuery`'s own lifecycle already confines both to "while
-  // this page is open" — the interval stops the moment the component
-  // unmounts, and React Query additionally pauses it while the window
-  // isn't focused — so there's no separate "module active" check needed.
-  const [autoUpdateHotspots, setAutoUpdateHotspots] = usePersistentState(
-    "fw.autoUpdateHotspots",
-    false,
-  );
+  // Kill hotspots (#905, now always-on by default): zKillboard
+  // faction-scoped feeds bucketed into friendly/enemy/cartel per system
+  // over the last ~6h, replacing the generic ESI kill-count tile heat
+  // with the warzone's actual faction-scoped activity. Requires a militia
+  // selection (Observer has no "friendly"/"enemy" to bucket against).
+  // Refresh cadence follows the page-level `autoRefresh` toggle — same
+  // lifecycle reasoning as the stats/map queries above it.
   const hotspots = useQuery({
     queryKey: [
       "intel",
@@ -929,22 +945,19 @@ function Warzone({
     ],
     queryFn: () =>
       intelFwHotspots(perspective!.myFaction, perspective!.enemyFaction),
-    enabled: !!perspective && heatLayer !== "off",
+    enabled: !!perspective,
     staleTime: 5 * 60_000,
-    refetchInterval: autoUpdateHotspots ? 60_000 : false,
-    refetchOnMount: autoUpdateHotspots ? "always" : true,
+    refetchInterval: autoRefresh ? 60_000 : false,
+    refetchOnMount: autoRefresh ? "always" : true,
   });
   const hotspotCounts = useMemo(
     () => new Map(hotspots.data?.systems.map((c) => [c.systemId, c]) ?? []),
     [hotspots.data],
   );
-  const maxHeatCount = useMemo(() => {
-    if (heatLayer === "off") return 1;
-    return Math.max(
-      1,
-      ...[...hotspotCounts.values()].map((c) => heatCount(c, heatLayer)),
-    );
-  }, [hotspotCounts, heatLayer]);
+  const maxHotspotTotal = useMemo(
+    () => Math.max(1, ...[...hotspotCounts.values()].map(hotspotTotal)),
+    [hotspotCounts],
+  );
 
   const ids = useMemo(
     () => new Set(nameFilteredSystems.map((s) => s.systemId)),
@@ -1040,19 +1053,13 @@ function Warzone({
         ring: dimmed ? undefined : CONTEST_RING[n.contested],
         bg: dimmed
           ? undefined
-          : heatLayer !== "off"
-            ? heatBg(
+          : perspective
+            ? hotspotHeatBg(
                 CONTEST_RGB[n.contested] ?? BASE_RGB,
-                heatCount(
-                  hotspotCounts.get(n.systemId) ?? {
-                    friendlyLosses: 0,
-                    enemyLosses: 0,
-                    cartelActivity: 0,
-                  },
-                  heatLayer,
+                hotspotTotal(
+                  hotspotCounts.get(n.systemId) ?? NO_HOTSPOT_ACTIVITY,
                 ),
-                maxHeatCount,
-                heatLayer,
+                maxHotspotTotal,
               )
             : tileBg(n.contested, n.kills, maxKills),
         current: isCurrent,
@@ -1068,9 +1075,8 @@ function Warzone({
     perspective,
     playstyle,
     radius,
-    heatLayer,
     hotspotCounts,
-    maxHeatCount,
+    maxHotspotTotal,
   ]);
   const graphEdges: SystemGraphEdge[] = data.edges
     .filter(([a, b]) => ids.has(a) && ids.has(b))
@@ -1108,46 +1114,12 @@ function Warzone({
         </div>
       </div>
       {perspective && (
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <span className="text-xs text-zinc-500">Heat</span>
-          <div className="flex overflow-hidden rounded border border-zinc-700 text-sm">
-            {HEAT_LAYER_OPTIONS.map((h) => (
-              <button
-                key={h.key}
-                onClick={() => setHeatLayer(h.key)}
-                className={`px-3 py-1 ${
-                  heatLayer === h.key
-                    ? "bg-zinc-700 text-zinc-100"
-                    : "text-zinc-400 hover:bg-zinc-800"
-                }`}
-              >
-                {h.label}
-              </button>
-            ))}
-          </div>
-          {heatLayer !== "off" && (
-            <>
-              <label className="flex items-center gap-1.5 text-xs text-zinc-500">
-                <input
-                  type="checkbox"
-                  checked={autoUpdateHotspots}
-                  onChange={(e) =>
-                    setAutoUpdateHotspots(e.currentTarget.checked)
-                  }
-                />
-                Auto-update (1 min)
-              </label>
-              <span
-                className="text-xs text-zinc-600"
-                title="Insurgency corruption/suppression stage has no public ESI endpoint — only cartel kill activity can be shown here, not the corruption bar."
-              >
-                cartel activity shown, not corruption stage
-              </span>
-            </>
-          )}
-          {hotspots.isLoading && heatLayer !== "off" && (
-            <span className="text-xs text-zinc-600">Loading…</span>
-          )}
+        <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-zinc-600">
+          <span title="Insurgency corruption/suppression stage has no public ESI endpoint — only cartel kill activity can be shown here, not the corruption bar.">
+            Heat: friendly + enemy + cartel kill activity, last ~6h — cartel
+            activity shown, not corruption stage
+          </span>
+          {hotspots.isLoading && <span>Loading…</span>}
         </div>
       )}
       {playstyle === "plexing" && perspective && (
@@ -1260,7 +1232,7 @@ function Warzone({
         forcedSort={forcedSort}
         loginBaseline={loginBaseline}
         hotspotCounts={hotspotCounts}
-        showHotspots={heatLayer !== "off"}
+        showHotspots={perspective != null}
       />
 
       <div className="mt-4 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-zinc-400">
@@ -1436,9 +1408,9 @@ function SystemTable({
   loginBaseline: ReadonlyMap<number, VpLoginBaseline>;
   /** Faction-scoped kill activity per system id, from the hotspots query. */
   hotspotCounts: ReadonlyMap<number, HotspotSystemCounts>;
-  /** Shown once a heat layer is active above the map — same gate the
-   *  hotspots query itself uses, so the column never shows stale "—"s for
-   *  data that was never fetched. */
+  /** Shown once a militia is selected (hotspots are always fetched then) —
+   *  same gate the hotspots query itself uses, so the column never shows
+   *  stale "—"s for data that was never fetched. */
   showHotspots: boolean;
 }) {
   const { sortKey, sortDir, toggleSort } = usePersistentSort<FwSortKey>(

@@ -1,17 +1,5 @@
 import type { HotspotSystemCounts } from "../../lib/api";
 
-/** Map heat-layer selection (#905): mutually exclusive with each other and
- *  with the default kill-heat tint — "off" restores today's behaviour. */
-export type HeatLayer = "off" | "friendly" | "enemy" | "cartel";
-
-export const HEAT_LAYER_OPTIONS: readonly { key: HeatLayer; label: string }[] =
-  [
-    { key: "off", label: "Off" },
-    { key: "friendly", label: "Our losses" },
-    { key: "enemy", label: "Their losses" },
-    { key: "cartel", label: "Cartel activity" },
-  ];
-
 /** The three raw hotspot counts a system can carry (dropping `systemId` —
  *  callers already have it from the `FwSystemNode` they're joining onto). */
 type HotspotCounts = Pick<
@@ -19,44 +7,28 @@ type HotspotCounts = Pick<
   "friendlyLosses" | "enemyLosses" | "cartelActivity"
 >;
 
-/** The count a given heat layer paints with; 0 (no tint) for "off". */
-export function heatCount(row: HotspotCounts, layer: HeatLayer): number {
-  switch (layer) {
-    case "friendly":
-      return row.friendlyLosses;
-    case "enemy":
-      return row.enemyLosses;
-    case "cartel":
-      return row.cartelActivity;
-    case "off":
-      return 0;
-  }
-}
+/** Colour the kill-activity heat deepens toward — one fixed hue now that
+ *  there's a single always-on heat view (total faction-scoped activity)
+ *  instead of a friendly/enemy/cartel layer picker. */
+const HOTSPOT_HEAT_RGB: [number, number, number] = [220, 38, 38]; // rose
 
-const HEAT_LAYER_RGB: Record<
-  Exclude<HeatLayer, "off">,
-  [number, number, number]
-> = {
-  friendly: [220, 38, 38], // rose/red — danger: this is where we're dying
-  enemy: [16, 185, 129], // emerald — good news: this is where we're winning
-  cartel: [168, 85, 247], // purple — NPC insurgency kill activity
-};
-
-/** Tile background for the active heat layer, deepening from `baseRgb`
- *  (typically the contested-state base tint — the layer replaces the kill
- *  heat, not the contest colouring) toward that layer's own colour as
- *  `count` approaches the warzone's busiest system for it. 0 leaves the
- *  tile untinted (returns `undefined`, matching `tileBg`'s convention). */
-export function heatBg(
+/** Tile background for a system's total faction-scoped kill activity
+ *  (friendly losses + enemy losses + cartel activity, last ~6h) —
+ *  deepens from `baseRgb` (typically the contested-state tint — this
+ *  replaces the generic ESI kill-count heat, not the contest colouring)
+ *  toward the heat colour as `total` approaches the warzone's busiest
+ *  system. 0 leaves the tile untinted (returns `undefined`, matching
+ *  `tileBg`'s convention). */
+export function hotspotHeatBg(
   baseRgb: readonly [number, number, number],
-  count: number,
-  maxCount: number,
-  layer: Exclude<HeatLayer, "off">,
+  total: number,
+  maxTotal: number,
 ): string | undefined {
-  if (count <= 0) return undefined;
-  const t = Math.min(1, count / Math.max(3, maxCount)) * 0.85;
-  const rgb = HEAT_LAYER_RGB[layer];
-  const mix = baseRgb.map((c, i) => Math.round(c + (rgb[i] - c) * t));
+  if (total <= 0) return undefined;
+  const t = Math.min(1, total / Math.max(3, maxTotal)) * 0.85;
+  const mix = baseRgb.map((c, i) =>
+    Math.round(c + (HOTSPOT_HEAT_RGB[i] - c) * t),
+  );
   return `rgb(${mix.join(",")})`;
 }
 
