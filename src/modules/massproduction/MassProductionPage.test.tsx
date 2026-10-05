@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import type { MassProductionPlan } from "../../lib/api";
 import { invokeMock, mockInvoke, renderWithQuery } from "../../test/harness";
@@ -104,8 +104,8 @@ describe("MassProductionPage", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("massprod_plan", {
       lines: [
-        { name: "5MN Microwarpdrive II Blueprint" },
-        { name: "Not A Real Blueprint" },
+        { name: "5MN Microwarpdrive II Blueprint", buildRuns: null },
+        { name: "Not A Real Blueprint", buildRuns: null },
       ],
       mode: "owned",
       hypotheticalConfig: { t1Runs: 1, t1Me: 10, t2Me: 2 },
@@ -133,7 +133,9 @@ describe("MassProductionPage", () => {
     expect(screen.getByText("Special edition · ME0")).toBeInTheDocument();
 
     expect(invokeMock).toHaveBeenCalledWith("massprod_plan", {
-      lines: [{ name: "Republic Fleet Gyrostabilizer Blueprint" }],
+      lines: [
+        { name: "Republic Fleet Gyrostabilizer Blueprint", buildRuns: null },
+      ],
       mode: "hypothetical",
       hypotheticalConfig: { t1Runs: 1, t1Me: 10, t2Me: 2 },
     });
@@ -308,5 +310,89 @@ describe("MassProductionPage", () => {
         id: "doctrine",
       }),
     );
+  });
+
+  it("parses a build-run count on a pasted line and applies it as an override", async () => {
+    const overriddenPlan: MassProductionPlan = {
+      ...MWD_PLAN,
+      matchedBlueprints: [{ ...MWD_PLAN.matchedBlueprints[0], totalRuns: 50 }],
+    };
+    mockInvoke({
+      sde_status: () => SDE_OK,
+      massprod_plan: () => overriddenPlan,
+    });
+    renderWithQuery(<MassProductionPage />);
+
+    await pasteAndImport("5MN Microwarpdrive II Blueprint\t50");
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("massprod_plan", {
+        lines: [{ name: "5MN Microwarpdrive II Blueprint", buildRuns: 50 }],
+        mode: "owned",
+        hypotheticalConfig: { t1Runs: 1, t1Me: 10, t2Me: 2 },
+      }),
+    );
+    expect(await screen.findByLabelText("Runs to build of 1073")).toHaveValue(
+      50,
+    );
+  });
+
+  describe("exporting lists", () => {
+    const writeText = vi.fn<(t: string) => Promise<void>>();
+    beforeEach(() => {
+      writeText.mockReset().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("copies the current blueprint list with its resolved run counts", async () => {
+      mockInvoke({
+        sde_status: () => SDE_OK,
+        massprod_plan: () => MWD_PLAN,
+      });
+      renderWithQuery(<MassProductionPage />);
+
+      await pasteAndImport("5MN Microwarpdrive II Blueprint");
+      await screen.findByText("Mineral");
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy list" }));
+      await waitFor(() =>
+        expect(writeText).toHaveBeenCalledWith(
+          "5MN Microwarpdrive II Blueprint\t300",
+        ),
+      );
+    });
+
+    it("copies a saved build list, omitting the count for lines with no override", async () => {
+      mockInvoke({
+        sde_status: () => SDE_OK,
+        massprod_lists: () => [
+          {
+            id: "doctrine",
+            name: "Doctrine",
+            items: [
+              {
+                typeId: 1073,
+                name: "5MN Microwarpdrive II Blueprint",
+                buildRuns: 50,
+              },
+              { typeId: 999, name: "Widget I Blueprint", buildRuns: null },
+            ],
+          },
+        ],
+      });
+      renderWithQuery(<MassProductionPage />);
+      await screen.findByRole("button", { name: "Paste blueprint names" });
+
+      fireEvent.click(screen.getByRole("button", { name: "Build lists" }));
+      await screen.findByText("Doctrine");
+      fireEvent.click(screen.getByRole("button", { name: "Copy Doctrine" }));
+
+      await waitFor(() =>
+        expect(writeText).toHaveBeenCalledWith(
+          "5MN Microwarpdrive II Blueprint\t50\nWidget I Blueprint",
+        ),
+      );
+    });
   });
 });

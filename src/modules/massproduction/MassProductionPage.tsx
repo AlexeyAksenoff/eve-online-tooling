@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Check,
   ClipboardCopy,
   FolderOpen,
   RotateCcw,
@@ -34,6 +35,10 @@ import { InlineError } from "../../components/InlineError";
 import { Field } from "../../components/forms";
 import { PasteImportControl } from "../../components/PasteImportControl";
 import { SdeGate } from "../../components/SdeGate";
+import {
+  exportBlueprintLines,
+  parseBlueprintLines,
+} from "./parseBlueprintLines";
 
 const TITLE = "Mass Production";
 const SUBTITLE =
@@ -63,6 +68,13 @@ function Workbench() {
    *  `massprodPlan` call's `BlueprintLine.buildRuns` so a row's edit
    *  actually recomputes the materials below it. */
   const [overrides, setOverrides] = useState<Record<number, number>>({});
+  /** One-shot "pending import to reconcile", set only by `importLines`
+   *  right before `build.mutate` and consumed (then cleared) by the
+   *  mutation's `onSuccess` — lets a pasted "Name\tRuns" line's explicit
+   *  count land in `overrides` once the plan resolves it to a real type id,
+   *  without clobbering overrides already set synchronously by a single-
+   *  cell edit or a loaded build list (those leave this `null`). */
+  const pendingOverridesByNameRef = useRef<Map<string, number> | null>(null);
 
   const build = useMutation({
     mutationFn: (lines: BlueprintLine[]) =>
@@ -70,6 +82,16 @@ function Workbench() {
     onSuccess: (result) => {
       setPlan(result);
       setPlanError(null);
+      const pending = pendingOverridesByNameRef.current;
+      if (pending) {
+        pendingOverridesByNameRef.current = null;
+        const next: Record<number, number> = {};
+        for (const b of result.matchedBlueprints) {
+          const v = pending.get(b.name.trim().toLowerCase());
+          if (v != null) next[b.typeId] = v;
+        }
+        setOverrides(next);
+      }
     },
     onError: (e) => {
       setPlanError(
@@ -80,14 +102,20 @@ function Workbench() {
     },
   });
 
-  function importNames() {
-    const names = text
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
-    if (names.length === 0) return;
-    setOverrides({});
-    build.mutate(names.map((name) => ({ name })));
+  /** Paste import: each line is a blueprint name, optionally followed by a
+   *  build-run count ("Rifter Blueprint" or "Rifter Blueprint\t5") — the
+   *  same Multibuy-style format `exportBlueprintLines` writes, so an
+   *  exported list re-imports with its counts intact. */
+  function importLines() {
+    const lines = parseBlueprintLines(text);
+    if (lines.length === 0) return;
+    const named = new Map<string, number>();
+    for (const l of lines) {
+      if (l.buildRuns != null)
+        named.set(l.name.trim().toLowerCase(), l.buildRuns);
+    }
+    pendingOverridesByNameRef.current = named;
+    build.mutate(lines);
   }
 
   /** A `BuildRunsCell` edit: set or clear one blueprint's override, then
@@ -135,13 +163,13 @@ function Workbench() {
             <ModeToggle mode={mode} onChange={setMode} />
             <PasteImportControl
               label="Paste blueprint names"
-              title="Paste blueprint names, one per line (e.g. from an in-game asset export)"
+              title='Paste blueprint names, one per line — optionally with a build-run count ("Rifter Blueprint" or "Rifter Blueprint\t5")'
               placeholder={
-                'paste blueprint names — one per line\n(e.g. "5MN Microwarpdrive II Blueprint")'
+                'paste blueprint names — one per line\n(e.g. "5MN Microwarpdrive II Blueprint" or "Rifter Blueprint  5")'
               }
               value={text}
               setValue={setText}
-              onImport={importNames}
+              onImport={importLines}
               pending={build.isPending}
             />
             <BuildListsPanel
@@ -149,6 +177,7 @@ function Workbench() {
               overrides={overrides}
               onLoad={loadBuildList}
             />
+            <CopyPlanButton plan={plan} />
           </div>
           <InlineError message={planError} className="text-xs text-rose-400" />
           {mode === "hypothetical" && (
@@ -176,6 +205,35 @@ function Workbench() {
   );
 }
 
+/** Export the current blueprint list (resolved build-run counts included)
+ * as a Multibuy-style "Name\tRuns" paste — share it with a teammate, or
+ * paste it back into this same page later to reproduce the exact plan.
+ * Disabled with nothing built yet to export. */
+function CopyPlanButton({ plan }: { plan: MassProductionPlan | null }) {
+  const { copied, copy } = useCopyToClipboard(1500);
+  const canCopy = plan != null && plan.matchedBlueprints.length > 0;
+  return (
+    <button
+      onClick={() =>
+        canCopy &&
+        copy(
+          exportBlueprintLines(
+            plan.matchedBlueprints.map((b) => ({
+              name: b.name,
+              runs: b.totalRuns,
+            })),
+          ),
+        )
+      }
+      disabled={!canCopy}
+      title='Copy the current blueprint list with build-run counts (one "Name␉Runs" per line) — paste it back in later, or share it'
+      className="flex items-center gap-1.5 rounded border border-zinc-700 px-2 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+    >
+      <ClipboardCopy size={13} />
+      {copied ? "Copied ✓" : "Copy list"}
+    </button>
+  );
+}
 /** Owned-copies vs. Hypothetical mode toggle (#893) — Owned matches every
  * pasted blueprint against real ESI-owned copies (#883's original
  * behavior); Hypothetical assumes a rule-derived (runs, ME) per line
@@ -295,6 +353,7 @@ function BuildListsPanel({
   const [saveOpen, setSaveOpen] = useState(false);
   const [name, setName] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const { copied: copiedList, copy: copyList } = useCopyToClipboard(1500);
 
   const listsQuery = useQuery({
     queryKey: MASSPROD_LISTS_KEY,
@@ -373,6 +432,28 @@ function BuildListsPanel({
                     <span className="ml-1.5 text-zinc-500">
                       ({list.items.length})
                     </span>
+                  </button>
+                  <button
+                    onClick={() =>
+                      copyList(
+                        exportBlueprintLines(
+                          list.items.map((i) => ({
+                            name: i.name,
+                            runs: i.buildRuns,
+                          })),
+                        ),
+                        list.id,
+                      )
+                    }
+                    aria-label={`Copy ${list.name}`}
+                    title="Copy this list as a Multibuy-style paste (Name, or Name␉Runs if it has a saved build-run)"
+                    className="shrink-0 text-zinc-500 hover:text-indigo-400"
+                  >
+                    {copiedList === list.id ? (
+                      <Check size={13} />
+                    ) : (
+                      <ClipboardCopy size={13} />
+                    )}
                   </button>
                   <button
                     onClick={() => remove.mutate(list.id)}
