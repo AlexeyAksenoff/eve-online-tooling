@@ -18,6 +18,7 @@ import {
   type FwJumpResult,
   type FwMap,
   type FwSystemNode,
+  type HotspotSystemCounts,
 } from "../../lib/api";
 import {
   formatEveDateTime,
@@ -76,7 +77,9 @@ import {
   HEAT_LAYER_OPTIONS,
   heatBg,
   heatCount,
-  rankHotspots,
+  hotspotDescription,
+  hotspotTotal,
+  NO_HOTSPOT_ACTIVITY,
   type HeatLayer,
 } from "./hotspots";
 
@@ -209,7 +212,8 @@ type FwSortKey =
   | "npcKills"
   | "jumps"
   | "hops"
-  | "farmScore";
+  | "farmScore"
+  | "hotspotActivity";
 
 const FW_SORT_KEYS: readonly FwSortKey[] = [
   "name",
@@ -227,6 +231,7 @@ const FW_SORT_KEYS: readonly FwSortKey[] = [
   "jumps",
   "hops",
   "farmScore",
+  "hotspotActivity",
 ];
 
 /** Numeric rank for sorting battlefield class: frontline (most tactically
@@ -388,6 +393,20 @@ const FARM_SCORE_COLUMN: SortColumn<FwSortKey> = {
   numeric: true,
   description:
     "v1 plexing score: 0.4·capture + 0.25·(low kills) + 0.2·(low NPC kills) + 0.15·(close to me). Higher is safer/faster to farm.",
+};
+
+/** Faction-scoped kill activity (#905, extended): friendly/enemy losses +
+ *  NPC cartel activity over the last ~6h, from zKillboard (`hotspots.ts`).
+ *  Perspective-mode only — shown once the heat layer above the map is
+ *  active, replacing the old separately-ranked "Hottest systems" panel so
+ *  every row gets this, sortable/filterable like everything else, instead
+ *  of a capped top-8 list that never responded to the heat-layer toggle. */
+const HOTSPOT_COLUMN: SortColumn<FwSortKey> = {
+  key: "hotspotActivity",
+  label: "Activity 6h",
+  numeric: false,
+  description:
+    "Faction-scoped kill activity over the last ~6h (zKillboard): friendly losses, enemy losses, and NPC cartel activity.",
 };
 
 /**
@@ -890,6 +909,17 @@ function Warzone({
     "fw.heatLayer",
     "off",
   );
+  // Auto-update toggle, persisted and opt-in (zKill/ESI calls aren't free):
+  // while on, re-polls every 60s and forces a fresh fetch whenever this
+  // page (re)mounts, instead of only refetching once the 5-min staleTime
+  // lapses. `useQuery`'s own lifecycle already confines both to "while
+  // this page is open" — the interval stops the moment the component
+  // unmounts, and React Query additionally pauses it while the window
+  // isn't focused — so there's no separate "module active" check needed.
+  const [autoUpdateHotspots, setAutoUpdateHotspots] = usePersistentState(
+    "fw.autoUpdateHotspots",
+    false,
+  );
   const hotspots = useQuery({
     queryKey: [
       "intel",
@@ -901,6 +931,8 @@ function Warzone({
       intelFwHotspots(perspective!.myFaction, perspective!.enemyFaction),
     enabled: !!perspective && heatLayer !== "off",
     staleTime: 5 * 60_000,
+    refetchInterval: autoUpdateHotspots ? 60_000 : false,
+    refetchOnMount: autoUpdateHotspots ? "always" : true,
   });
   const hotspotCounts = useMemo(
     () => new Map(hotspots.data?.systems.map((c) => [c.systemId, c]) ?? []),
@@ -913,10 +945,6 @@ function Warzone({
       ...[...hotspotCounts.values()].map((c) => heatCount(c, heatLayer)),
     );
   }, [hotspotCounts, heatLayer]);
-  const hotspotRows = useMemo(
-    () => rankHotspots(playstyleSystems, [...hotspotCounts.values()], dist, 8),
-    [playstyleSystems, hotspotCounts, dist],
-  );
 
   const ids = useMemo(
     () => new Set(nameFilteredSystems.map((s) => s.systemId)),
@@ -1097,53 +1125,29 @@ function Warzone({
               </button>
             ))}
           </div>
+          {heatLayer !== "off" && (
+            <>
+              <label className="flex items-center gap-1.5 text-xs text-zinc-500">
+                <input
+                  type="checkbox"
+                  checked={autoUpdateHotspots}
+                  onChange={(e) =>
+                    setAutoUpdateHotspots(e.currentTarget.checked)
+                  }
+                />
+                Auto-update (1 min)
+              </label>
+              <span
+                className="text-xs text-zinc-600"
+                title="Insurgency corruption/suppression stage has no public ESI endpoint — only cartel kill activity can be shown here, not the corruption bar."
+              >
+                cartel activity shown, not corruption stage
+              </span>
+            </>
+          )}
           {hotspots.isLoading && heatLayer !== "off" && (
             <span className="text-xs text-zinc-600">Loading…</span>
           )}
-        </div>
-      )}
-      {heatLayer !== "off" && hotspotRows.length > 0 && (
-        <div className="mb-4 rounded border border-zinc-800 bg-zinc-900/50 p-3 text-xs">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <span className="font-medium text-zinc-300">
-              Hottest systems (6h)
-            </span>
-            <span
-              className="text-zinc-600"
-              title="Insurgency corruption/suppression stage has no public ESI endpoint — only cartel kill activity can be shown here, not the corruption bar."
-            >
-              cartel activity shown, not corruption stage
-            </span>
-          </div>
-          <ul className="space-y-1">
-            {hotspotRows.map((r) => (
-              <li
-                key={r.systemId}
-                className="flex items-center justify-between gap-2"
-              >
-                <a
-                  href={`https://zkillboard.com/system/${r.systemId}/`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="min-w-0 truncate text-zinc-300 hover:text-indigo-300"
-                >
-                  {r.systemName}
-                </a>
-                <span className="flex shrink-0 items-center gap-3 tabular-nums text-zinc-500">
-                  {r.hops != null && <span>{r.hops}j</span>}
-                  <span className="text-rose-400" title="Our losses">
-                    {r.friendlyLosses}
-                  </span>
-                  <span className="text-emerald-400" title="Their losses">
-                    {r.enemyLosses}
-                  </span>
-                  <span className="text-purple-400" title="Cartel activity">
-                    {r.cartelActivity}
-                  </span>
-                </span>
-              </li>
-            ))}
-          </ul>
         </div>
       )}
       {playstyle === "plexing" && perspective && (
@@ -1255,6 +1259,8 @@ function Warzone({
         showFarmScore={playstyle === "plexing"}
         forcedSort={forcedSort}
         loginBaseline={loginBaseline}
+        hotspotCounts={hotspotCounts}
+        showHotspots={heatLayer !== "off"}
       />
 
       <div className="mt-4 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-zinc-400">
@@ -1411,6 +1417,8 @@ function SystemTable({
   showFarmScore,
   forcedSort,
   loginBaseline,
+  hotspotCounts,
+  showHotspots,
 }: {
   systems: FwSystemNode[];
   /** Hop counts keyed by String(systemId), from the active character's location. */
@@ -1426,6 +1434,12 @@ function SystemTable({
   forcedSort?: { key: FwSortKey; dir: "asc" | "desc" };
   /** "Since login" VP baseline, for the Δ login column. */
   loginBaseline: ReadonlyMap<number, VpLoginBaseline>;
+  /** Faction-scoped kill activity per system id, from the hotspots query. */
+  hotspotCounts: ReadonlyMap<number, HotspotSystemCounts>;
+  /** Shown once a heat layer is active above the map — same gate the
+   *  hotspots query itself uses, so the column never shows stale "—"s for
+   *  data that was never fetched. */
+  showHotspots: boolean;
 }) {
   const { sortKey, sortDir, toggleSort } = usePersistentSort<FwSortKey>(
     "sort.fw-systems",
@@ -1437,9 +1451,9 @@ function SystemTable({
   const effectiveSortKey = forcedSort?.key ?? sortKey;
   const effectiveSortDir = forcedSort?.dir ?? sortDir;
   const baseColumns = perspective ? FW_COLUMNS_PERSPECTIVE : FW_COLUMNS;
-  const columns = showFarmScore
-    ? [...baseColumns, FARM_SCORE_COLUMN]
-    : baseColumns;
+  let columns = baseColumns;
+  if (showHotspots) columns = [...columns, HOTSPOT_COLUMN];
+  if (showFarmScore) columns = [...columns, FARM_SCORE_COLUMN];
 
   // Augment rows with sort-friendly scalar fields, then sort.
   const rows = useMemo(() => {
@@ -1455,11 +1469,17 @@ function SystemTable({
        *  `FwSystemNode` itself. `null` outside perspective mode. */
       vpDelta30mSigned: number | null;
       vpDeltaLoginSigned: number | null;
+      hotspot: HotspotSystemCounts;
+      hotspotActivity: number;
     };
     const augmented: AugRow[] = systems.map((s) => {
       const persp = perspective
         ? perspectiveFor(s.occupierId, s.contested, perspective.myFaction)
         : null;
+      const hotspot = hotspotCounts.get(s.systemId) ?? {
+        systemId: s.systemId,
+        ...NO_HOTSPOT_ACTIVITY,
+      };
       return {
         ...s,
         contestedRank: CONTEST_RANK[s.contested] ?? 0,
@@ -1482,6 +1502,8 @@ function SystemTable({
               perspective.myFaction,
             )
           : null,
+        hotspot,
+        hotspotActivity: hotspotTotal(hotspot),
       };
     });
     return sortRows(augmented, effectiveSortKey, effectiveSortDir, {
@@ -1499,6 +1521,7 @@ function SystemTable({
     perspective,
     farmScores,
     loginBaseline,
+    hotspotCounts,
   ]);
 
   return (
@@ -1626,6 +1649,14 @@ function SystemTable({
                     : formatInt(s.hops)
                   : "—"}
               </td>
+              {showHotspots && (
+                <td
+                  className="px-3 py-1.5 text-zinc-400"
+                  title={`${s.hotspot.friendlyLosses} friendly losses · ${s.hotspot.enemyLosses} enemy losses · ${s.hotspot.cartelActivity} cartel kills, last ~6h`}
+                >
+                  {hotspotDescription(s.hotspot)}
+                </td>
+              )}
               {showFarmScore && (
                 <td className="px-3 py-1.5 text-right tabular-nums text-emerald-300">
                   {s.farmScore.toFixed(2)}

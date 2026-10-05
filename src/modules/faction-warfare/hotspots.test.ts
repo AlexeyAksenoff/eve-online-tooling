@@ -1,43 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { heatBg, heatCount, rankHotspots } from "./hotspots";
-import type { FwSystemNode, HotspotSystemCounts } from "../../lib/api";
-
-function node(id: number, name: string): FwSystemNode {
-  return {
-    systemId: id,
-    name,
-    region: "Devoid",
-    warzone: "Amarr–Minmatar",
-    security: 0.3,
-    owner: "Amarr",
-    occupier: "Amarr",
-    ownerId: 500003,
-    occupierId: 500003,
-    contested: "uncontested",
-    vpPct: 0,
-    kills: 0,
-    npcKills: 0,
-    jumps: 0,
-    battlefield: "frontline",
-    vpVelocity: null,
-    vpDelta30m: null,
-    x: 0,
-    z: 0,
-  };
-}
-
-function counts(
-  systemId: number,
-  overrides: Partial<HotspotSystemCounts> = {},
-): HotspotSystemCounts {
-  return {
-    systemId,
-    friendlyLosses: 0,
-    enemyLosses: 0,
-    cartelActivity: 0,
-    ...overrides,
-  };
-}
+import {
+  heatBg,
+  heatCount,
+  hotspotDescription,
+  hotspotTotal,
+} from "./hotspots";
 
 describe("heatCount", () => {
   it("selects the count matching the active layer", () => {
@@ -80,56 +47,42 @@ describe("heatBg", () => {
   });
 });
 
-describe("rankHotspots", () => {
-  it("ranks by total activity across all three buckets, descending", () => {
-    const systems = [node(1, "Quiet"), node(2, "Busy")];
-    const data = [
-      counts(1, { friendlyLosses: 1 }),
-      counts(2, { friendlyLosses: 3, enemyLosses: 2, cartelActivity: 1 }),
-    ];
-    const rows = rankHotspots(systems, data, {});
-    expect(rows.map((r) => r.systemName)).toEqual(["Busy", "Quiet"]);
+describe("hotspotTotal", () => {
+  it("sums all three buckets", () => {
+    expect(
+      hotspotTotal({ friendlyLosses: 2, enemyLosses: 3, cartelActivity: 1 }),
+    ).toBe(6);
+  });
+});
+
+describe("hotspotDescription", () => {
+  it("omits zero terms and joins the rest", () => {
+    expect(
+      hotspotDescription({
+        friendlyLosses: 3,
+        enemyLosses: 0,
+        cartelActivity: 1,
+      }),
+    ).toBe("3 ours · 1 cartel");
   });
 
-  it("drops counts for systems outside the given warzone system set", () => {
-    const systems = [node(1, "InWarzone")];
-    const data = [
-      counts(1, { friendlyLosses: 1 }),
-      counts(99, { friendlyLosses: 100 }),
-    ];
-    const rows = rankHotspots(systems, data, {});
-    expect(rows).toHaveLength(1);
-    expect(rows[0].systemId).toBe(1);
+  it("reads as a dash with no activity at all", () => {
+    expect(
+      hotspotDescription({
+        friendlyLosses: 0,
+        enemyLosses: 0,
+        cartelActivity: 0,
+      }),
+    ).toBe("—");
   });
 
-  it("breaks ties toward the closer system", () => {
-    const systems = [node(1, "Far"), node(2, "Near")];
-    const data = [
-      counts(1, { friendlyLosses: 1 }),
-      counts(2, { friendlyLosses: 1 }),
-    ];
-    const dist = { "1": 5, "2": 1 };
-    const rows = rankHotspots(systems, data, dist);
-    expect(rows.map((r) => r.systemName)).toEqual(["Near", "Far"]);
-  });
-
-  it("limits to the requested count", () => {
-    const systems = Array.from({ length: 12 }, (_, i) =>
-      node(i + 1, `Sys${i + 1}`),
-    );
-    const data = systems.map((s) => counts(s.systemId, { friendlyLosses: 1 }));
-    expect(rankHotspots(systems, data, {}, 8)).toHaveLength(8);
-  });
-
-  it("carries hop distance through when known, null otherwise", () => {
-    const systems = [node(1, "A"), node(2, "B")];
-    const data = [
-      counts(1, { friendlyLosses: 1 }),
-      counts(2, { friendlyLosses: 1 }),
-    ];
-    const rows = rankHotspots(systems, data, { "1": 3 });
-    const byId = new Map(rows.map((r) => [r.systemId, r]));
-    expect(byId.get(1)!.hops).toBe(3);
-    expect(byId.get(2)!.hops).toBeNull();
+  it("shows all three when every bucket has activity", () => {
+    expect(
+      hotspotDescription({
+        friendlyLosses: 1,
+        enemyLosses: 2,
+        cartelActivity: 3,
+      }),
+    ).toBe("1 ours · 2 theirs · 3 cartel");
   });
 });

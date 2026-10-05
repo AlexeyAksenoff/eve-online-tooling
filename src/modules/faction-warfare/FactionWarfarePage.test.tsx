@@ -767,7 +767,7 @@ describe("FW kill hotspots (#905)", () => {
     expect(screen.queryByText("Heat")).not.toBeInTheDocument();
   });
 
-  it("queries hotspots for the selected militia pair and shows the hottest-systems strip", async () => {
+  it("queries hotspots for the selected militia pair and shows activity in the table", async () => {
     mockInvoke({
       intel_fw_stats: () => [],
       intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
@@ -787,7 +787,9 @@ describe("FW kill hotspots (#905)", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Amarr Empire" }));
-    expect(screen.queryByText("Hottest systems (6h)")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("columnheader", { name: /Activity 6h/ }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Our losses" }));
     await waitFor(() =>
@@ -797,19 +799,55 @@ describe("FW kill hotspots (#905)", () => {
       }),
     );
     await waitFor(() =>
-      expect(screen.getByText("Hottest systems (6h)")).toBeInTheDocument(),
+      expect(
+        screen.getByRole("columnheader", { name: /Activity 6h/ }),
+      ).toBeInTheDocument(),
     );
+    const fightVilleRow = inTable().getByText("FightVille").closest("tr")!;
     expect(
-      screen.getByRole("link", { name: "FightVille" }),
+      within(fightVilleRow).getByText("5 ours · 1 theirs"),
     ).toBeInTheDocument();
+    // A system with no hotspot data at all reads as a dash, not a crash.
+    const quietRow = inTable().getByText("QuietTown").closest("tr")!;
+    expect(within(quietRow).getByTitle(/friendly losses/).textContent).toBe(
+      "—",
+    );
 
-    // Back to "Off" hides the strip again.
+    // Back to "Off" hides the column again.
     fireEvent.click(screen.getByRole("button", { name: "Off" }));
     await waitFor(() =>
       expect(
-        screen.queryByText("Hottest systems (6h)"),
+        screen.queryByRole("columnheader", { name: /Activity 6h/ }),
       ).not.toBeInTheDocument(),
     );
+  });
+
+  it("the auto-update checkbox polls every minute and forces a refetch on mount", async () => {
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
+      auth_characters: () => [],
+      auth_active_character: () => null,
+      intel_fw_hotspots: () => ({ systems: [] }),
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Amarr Empire" }));
+    fireEvent.click(screen.getByRole("button", { name: "Our losses" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("checkbox", { name: /Auto-update/ }),
+      ).toBeInTheDocument(),
+    );
+
+    const checkbox = screen.getByRole("checkbox", {
+      name: /Auto-update/,
+    }) as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    fireEvent.click(checkbox);
+    expect(checkbox.checked).toBe(true);
   });
 });
 

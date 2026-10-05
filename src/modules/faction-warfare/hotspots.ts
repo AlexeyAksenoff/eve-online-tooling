@@ -1,4 +1,4 @@
-import type { FwSystemNode, HotspotSystemCounts } from "../../lib/api";
+import type { HotspotSystemCounts } from "../../lib/api";
 
 /** Map heat-layer selection (#905): mutually exclusive with each other and
  *  with the default kill-heat tint — "off" restores today's behaviour. */
@@ -12,20 +12,15 @@ export const HEAT_LAYER_OPTIONS: readonly { key: HeatLayer; label: string }[] =
     { key: "cartel", label: "Cartel activity" },
   ];
 
-export interface HotspotRow {
-  systemId: number;
-  systemName: string;
-  friendlyLosses: number;
-  enemyLosses: number;
-  cartelActivity: number;
-  hops: number | null;
-}
+/** The three raw hotspot counts a system can carry (dropping `systemId` —
+ *  callers already have it from the `FwSystemNode` they're joining onto). */
+type HotspotCounts = Pick<
+  HotspotSystemCounts,
+  "friendlyLosses" | "enemyLosses" | "cartelActivity"
+>;
 
 /** The count a given heat layer paints with; 0 (no tint) for "off". */
-export function heatCount(
-  row: Pick<HotspotRow, "friendlyLosses" | "enemyLosses" | "cartelActivity">,
-  layer: HeatLayer,
-): number {
+export function heatCount(row: HotspotCounts, layer: HeatLayer): number {
   switch (layer) {
     case "friendly":
       return row.friendlyLosses;
@@ -65,38 +60,29 @@ export function heatBg(
   return `rgb(${mix.join(",")})`;
 }
 
-/**
- * Join hotspot counts onto the warzone's known systems (dropping any counts
- * for systems outside it — a militia pilot dying elsewhere in the cluster
- * isn't part of "where is my militia fighting in this warzone"), rank by
- * total activity across all three buckets, and take the top `limit`. Ties
- * break toward the closer system.
- */
-export function rankHotspots(
-  systems: FwSystemNode[],
-  counts: HotspotSystemCounts[],
-  dist: Record<string, number>,
-  limit = 8,
-): HotspotRow[] {
-  const bySystem = new Map(systems.map((s) => [s.systemId, s]));
-  const rows: HotspotRow[] = counts
-    .filter((c) => bySystem.has(c.systemId))
-    .map((c) => ({
-      systemId: c.systemId,
-      systemName: bySystem.get(c.systemId)!.name,
-      friendlyLosses: c.friendlyLosses,
-      enemyLosses: c.enemyLosses,
-      cartelActivity: c.cartelActivity,
-      hops: dist[String(c.systemId)] ?? null,
-    }));
-  rows.sort((a, b) => {
-    const total = (r: HotspotRow) =>
-      r.friendlyLosses + r.enemyLosses + r.cartelActivity;
-    return (
-      total(b) - total(a) ||
-      (a.hops ?? Infinity) - (b.hops ?? Infinity) ||
-      a.systemName.localeCompare(b.systemName)
-    );
-  });
-  return rows.slice(0, limit);
+/** A zero-count placeholder for a system the hotspots query hasn't resolved
+ *  (or hasn't loaded yet) — lets callers look a system up in the counts map
+ *  and always get a real object back instead of threading `undefined`
+ *  through every consumer. */
+export const NO_HOTSPOT_ACTIVITY: HotspotCounts = {
+  friendlyLosses: 0,
+  enemyLosses: 0,
+  cartelActivity: 0,
+};
+
+/** Total activity across all three buckets — the sortable/"how hot is
+ *  this system" number for the system table's Activity column. */
+export function hotspotTotal(row: HotspotCounts): number {
+  return row.friendlyLosses + row.enemyLosses + row.cartelActivity;
+}
+
+/** Compact "N ours · N theirs · N cartel" description for the system
+ *  table's Activity column — omits zero terms so a quiet system reads as a
+ *  plain dash instead of "0 ours · 0 theirs · 0 cartel". */
+export function hotspotDescription(row: HotspotCounts): string {
+  const parts: string[] = [];
+  if (row.friendlyLosses > 0) parts.push(`${row.friendlyLosses} ours`);
+  if (row.enemyLosses > 0) parts.push(`${row.enemyLosses} theirs`);
+  if (row.cartelActivity > 0) parts.push(`${row.cartelActivity} cartel`);
+  return parts.length > 0 ? parts.join(" · ") : "—";
 }
