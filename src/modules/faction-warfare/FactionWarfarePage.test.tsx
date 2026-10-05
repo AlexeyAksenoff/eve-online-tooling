@@ -92,6 +92,10 @@ beforeEach(() => {
     intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
     auth_characters: () => [],
     auth_active_character: () => null,
+    // Hotspots now fire for any perspective-mode render (heat is always
+    // on) — a harmless default so tests that don't care about hotspot
+    // data don't spam "query data cannot be undefined" console noise.
+    intel_fw_hotspots: () => ({ systems: [] }),
   });
 });
 
@@ -758,16 +762,19 @@ describe("FW detailed map tiles (#902)", () => {
   });
 });
 
-describe("FW kill hotspots (#905)", () => {
-  it("hides the heat toggle in Observer mode", async () => {
+describe("FW kill hotspots (#905, always-on)", () => {
+  it("shows no heat note or Activity column in Observer mode", async () => {
     renderPage();
     await waitFor(() =>
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
-    expect(screen.queryByText("Heat")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Heat:/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("columnheader", { name: /Activity 6h/ }),
+    ).not.toBeInTheDocument();
   });
 
-  it("queries hotspots for the selected militia pair and shows activity in the table", async () => {
+  it("queries hotspots as soon as a militia is selected and shows activity in the table", async () => {
     mockInvoke({
       intel_fw_stats: () => [],
       intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
@@ -787,11 +794,6 @@ describe("FW kill hotspots (#905)", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Amarr Empire" }));
-    expect(
-      screen.queryByRole("columnheader", { name: /Activity 6h/ }),
-    ).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Our losses" }));
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("intel_fw_hotspots", {
         myFaction: 500003,
@@ -813,37 +815,24 @@ describe("FW kill hotspots (#905)", () => {
       "—",
     );
 
-    // Back to "Off" hides the column again.
-    fireEvent.click(screen.getByRole("button", { name: "Off" }));
+    // Back to Observer hides the column again.
+    fireEvent.click(screen.getByRole("button", { name: "Observer" }));
     await waitFor(() =>
       expect(
         screen.queryByRole("columnheader", { name: /Activity 6h/ }),
       ).not.toBeInTheDocument(),
     );
   });
+});
 
-  it("the auto-update checkbox polls every minute and forces a refetch on mount", async () => {
-    mockInvoke({
-      intel_fw_stats: () => [],
-      intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
-      auth_characters: () => [],
-      auth_active_character: () => null,
-      intel_fw_hotspots: () => ({ systems: [] }),
-    });
+describe("FW auto refresh", () => {
+  it("the page-level checkbox is unchecked by default and toggles", async () => {
     renderPage();
     await waitFor(() =>
       expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Amarr Empire" }));
-    fireEvent.click(screen.getByRole("button", { name: "Our losses" }));
-    await waitFor(() =>
-      expect(
-        screen.getByRole("checkbox", { name: /Auto-update/ }),
-      ).toBeInTheDocument(),
-    );
-
     const checkbox = screen.getByRole("checkbox", {
-      name: /Auto-update/,
+      name: /Auto refresh/,
     }) as HTMLInputElement;
     expect(checkbox.checked).toBe(false);
     fireEvent.click(checkbox);

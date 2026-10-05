@@ -1,48 +1,24 @@
 import { describe, expect, it } from "vitest";
-import {
-  heatBg,
-  heatCount,
-  hotspotDescription,
-  hotspotTotal,
-} from "./hotspots";
+import { hotspotDescription, hotspotHeatBg, hotspotTotal } from "./hotspots";
 
-describe("heatCount", () => {
-  it("selects the count matching the active layer", () => {
-    const row = { friendlyLosses: 1, enemyLosses: 2, cartelActivity: 3 };
-    expect(heatCount(row, "friendly")).toBe(1);
-    expect(heatCount(row, "enemy")).toBe(2);
-    expect(heatCount(row, "cartel")).toBe(3);
-    expect(heatCount(row, "off")).toBe(0);
-  });
-});
-
-describe("heatBg", () => {
+describe("hotspotHeatBg", () => {
   const BASE: [number, number, number] = [24, 24, 27];
 
   it("returns undefined for zero activity", () => {
-    expect(heatBg(BASE, 0, 10, "friendly")).toBeUndefined();
+    expect(hotspotHeatBg(BASE, 0, 10)).toBeUndefined();
   });
 
-  it("deepens toward the layer's colour as count approaches max", () => {
-    const low = heatBg(BASE, 1, 10, "enemy");
-    const high = heatBg(BASE, 9, 10, "enemy");
+  it("deepens toward the heat colour as total approaches max", () => {
+    const low = hotspotHeatBg(BASE, 1, 10);
+    const high = hotspotHeatBg(BASE, 9, 10);
     expect(low).toBeDefined();
     expect(high).toBeDefined();
     expect(low).not.toBe(high);
   });
 
-  it("uses a different hue per layer", () => {
-    expect(heatBg(BASE, 5, 10, "friendly")).not.toBe(
-      heatBg(BASE, 5, 10, "enemy"),
-    );
-    expect(heatBg(BASE, 5, 10, "enemy")).not.toBe(
-      heatBg(BASE, 5, 10, "cartel"),
-    );
-  });
-
   it("blends from the given base colour, not a fixed default", () => {
-    const fromDark = heatBg([0, 0, 0], 10, 10, "friendly");
-    const fromLight = heatBg([255, 255, 255], 10, 10, "friendly");
+    const fromDark = hotspotHeatBg([0, 0, 0], 10, 10);
+    const fromLight = hotspotHeatBg([255, 255, 255], 10, 10);
     expect(fromDark).not.toBe(fromLight);
   });
 });
