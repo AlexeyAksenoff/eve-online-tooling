@@ -55,5 +55,13 @@ export function usePersistentSort<K extends string>(
     );
   }
 
-  return { sortKey: state.key, sortDir: state.dir, toggleSort };
+  // Explicit set (vs. toggle): used to seed a sensible default sort when a
+  // mode/preset switches in without the user having clicked a header yet.
+  // The header row stays fully interactive afterwards — this only seeds the
+  // initial sort, it doesn't pin it.
+  function setSort(key: K, dir: SortDir) {
+    setState({ key, dir });
+  }
+
+  return { sortKey: state.key, sortDir: state.dir, toggleSort, setSort };
 }

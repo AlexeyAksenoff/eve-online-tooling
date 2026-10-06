@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
 import { Navigation } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -13,19 +12,13 @@ import {
   intelFwJumps,
   intelFwPersonalStats,
   intelFwStats,
-  lpOffers,
   setWaypoint,
   type FwJumpResult,
   type FwMap,
   type FwSystemNode,
   type HotspotSystemCounts,
 } from "../../lib/api";
-import {
-  formatEveDateTime,
-  formatInt,
-  formatIsk,
-  sortRows,
-} from "../../lib/format";
+import { formatEveDateTime, formatInt, sortRows } from "../../lib/format";
 import {
   SystemGraph,
   type SystemGraphNode,
@@ -60,19 +53,11 @@ import {
   updateLoginBaselines,
   type VpLoginBaseline,
 } from "./vpChange";
-import { nearestFriendlyFrontline } from "./frontlineRoute";
 import {
   computeFarmScores,
   PLAYSTYLE_OPTIONS,
   type Playstyle,
 } from "./playstyle";
-import {
-  ASSUMED_BASE_LP_PER_CAPTURE,
-  ASSUMED_CAPTURE_MINUTES,
-  BATTLEFIELD_LP_MULTIPLIER,
-  MILITIA_LP_CORP_ID,
-  plexingIskPerHour,
-} from "./lpEstimate";
 import {
   hotspotDescription,
   hotspotHeatBg,
@@ -163,6 +148,19 @@ const FW_FILTERS: readonly { key: FwSystemFilter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "contested", label: "Contested" },
   { key: "uncontested", label: "Uncontested" },
+];
+
+/** Battlefield-class filter: frontlines are where contact/plexing actually
+ *  happens, command ops back them up — rearguard is deliberately left out
+ *  of the picker (it's the "nothing worth routing to" tier). */
+type FwBattlefieldFilter = "all" | "frontline" | "commandops";
+const FW_BATTLEFIELD_FILTERS: readonly {
+  key: FwBattlefieldFilter;
+  label: string;
+}[] = [
+  { key: "all", label: "All" },
+  { key: "frontline", label: "Frontlines" },
+  { key: "commandops", label: "Command Post" },
 ];
 
 /** Map height presets (#897). "fill" tracks the remaining viewport height
@@ -828,6 +826,9 @@ function Warzone({
     "fw.systemFilter",
     "all",
   );
+  // Battlefield-class filter (persisted): frontlines/command post/all.
+  const [battlefieldFilter, setBattlefieldFilter] =
+    usePersistentState<FwBattlefieldFilter>("fw.battlefieldFilter", "all");
 
   // Map size preset (#897), persisted; "fill" tracks the viewport via the
   // resize-aware hook, the fixed presets are plain pixel heights.
@@ -862,19 +863,6 @@ function Warzone({
   const dist = useMemo(() => jumpResult.data?.jumps ?? {}, [jumpResult.data]);
   const characterSystemId = jumpResult.data?.characterSystemId ?? null;
 
-  // Route to frontline (#908): nearest friendly frontline by hop count,
-  // ties broken toward fewer ship kills (safer arrival). Hidden without a
-  // character or a militia perspective — Observer has no "friendly" side.
-  const nearestFrontline = useMemo(
-    () =>
-      perspective && hasCharacter
-        ? nearestFriendlyFrontline(systems, dist, perspective.myFaction)
-        : null,
-    [systems, dist, perspective, hasCharacter],
-  );
-  const navigate = useNavigate();
-  const [frontlineError, setFrontlineError] = useState<string | null>(null);
-
   // Proximity filter (#898), persisted. "all" or no character → identical to
   // the unfiltered set; scopes both the table and the map together.
   const [radius, setRadius] = usePersistentState<FwProximityRadius>(
@@ -892,7 +880,8 @@ function Warzone({
 
   // Playstyle presets (#904), persisted. "all" keeps today's behaviour
   // (unfiltered, user-controlled sort). Plexing further filters to
-  // frontline/command-ops; PvP re-sorts only, no filtering.
+  // frontline/command-ops and seeds a farm-score sort (see SystemTable) —
+  // the header row stays fully sortable in either mode.
   const [playstyle, setPlaystyle] = usePersistentState<Playstyle>(
     "fw.playstyle",
     "all",
@@ -911,12 +900,6 @@ function Warzone({
         : {},
     [playstyleSystems, dist, hasCharacter, playstyle],
   );
-  const forcedSort: { key: FwSortKey; dir: "asc" | "desc" } | undefined =
-    playstyle === "pvp"
-      ? { key: "kills", dir: "desc" }
-      : playstyle === "plexing"
-        ? { key: "farmScore", dir: "desc" }
-        : undefined;
 
   // Name filter: typing narrows both the table and the map to systems whose
   // name contains the query (case-insensitive substring), hiding the rest.
@@ -965,13 +948,19 @@ function Warzone({
   );
 
   const tableSystems = useMemo(() => {
-    if (filter === "all") return nameFilteredSystems;
-    return nameFilteredSystems.filter((s) =>
-      filter === "contested"
-        ? s.contested !== "uncontested"
-        : s.contested === "uncontested",
-    );
-  }, [nameFilteredSystems, filter]);
+    let result = nameFilteredSystems;
+    if (filter !== "all") {
+      result = result.filter((s) =>
+        filter === "contested"
+          ? s.contested !== "uncontested"
+          : s.contested === "uncontested",
+      );
+    }
+    if (battlefieldFilter !== "all") {
+      result = result.filter((s) => s.battlefield === battlefieldFilter);
+    }
+    return result;
+  }, [nameFilteredSystems, filter, battlefieldFilter]);
 
   // Lay the tiles out as a top-down star map from real galactic X/Z coords
   // (x → horizontal, z → vertical, flipped so north is up), scaled to fit.
@@ -1006,10 +995,6 @@ function Warzone({
       const p = placed.get(String(n.systemId)) ?? { x: 0, y: 0 };
       const hops = dist[String(n.systemId)];
       const isCurrent = n.systemId === characterSystemId;
-      // PvP mode dims rearguard systems (#904) — mute the accent instead of
-      // the usual faction/relationship colour, so frontline/command-ops
-      // stand out as where fights actually concentrate.
-      const dimmed = playstyle === "pvp" && n.battlefield === "rearguard";
       const trendArrow = (() => {
         const tier = trendTier(n.vpVelocity);
         return tier ? TREND_ARROW[tier] : undefined;
@@ -1043,25 +1028,21 @@ function Warzone({
               trendArrow,
             }
           : undefined,
-        accent: dimmed
-          ? "#3f3f46" // zinc-700 — visibly muted vs. any faction/relationship hue
-          : perspective
-            ? RELATIONSHIP_HEX[
-                relationshipFor(n.occupierId, perspective.myFaction)
-              ]
-            : (FACTION_HEX[n.occupierId] ?? "#a1a1aa"),
-        ring: dimmed ? undefined : CONTEST_RING[n.contested],
-        bg: dimmed
-          ? undefined
-          : perspective
-            ? hotspotHeatBg(
-                CONTEST_RGB[n.contested] ?? BASE_RGB,
-                hotspotTotal(
-                  hotspotCounts.get(n.systemId) ?? NO_HOTSPOT_ACTIVITY,
-                ),
-                maxHotspotTotal,
-              )
-            : tileBg(n.contested, n.kills, maxKills),
+        accent: perspective
+          ? RELATIONSHIP_HEX[
+              relationshipFor(n.occupierId, perspective.myFaction)
+            ]
+          : (FACTION_HEX[n.occupierId] ?? "#a1a1aa"),
+        ring: CONTEST_RING[n.contested],
+        bg: perspective
+          ? hotspotHeatBg(
+              CONTEST_RGB[n.contested] ?? BASE_RGB,
+              hotspotTotal(
+                hotspotCounts.get(n.systemId) ?? NO_HOTSPOT_ACTIVITY,
+              ),
+              maxHotspotTotal,
+            )
+          : tileBg(n.contested, n.kills, maxKills),
         current: isCurrent,
         group: n.region,
         x: p.x,
@@ -1073,18 +1054,25 @@ function Warzone({
     dist,
     characterSystemId,
     perspective,
-    playstyle,
     radius,
     hotspotCounts,
     maxHotspotTotal,
   ]);
   const graphEdges: SystemGraphEdge[] = data.edges
     .filter(([a, b]) => ids.has(a) && ids.has(b))
-    .map(([a, b]) => ({
-      source: String(a),
-      target: String(b),
-      variant: "stargate",
-    }));
+    .map(([a, b]) => {
+      const current =
+        characterSystemId != null &&
+        (a === characterSystemId || b === characterSystemId);
+      return {
+        source: String(a),
+        target: String(b),
+        variant: "stargate",
+        // Highlight every jump out of the current system in green, so
+        // "where can I go from here" reads at a glance on the map.
+        color: current ? "#34d399" : undefined, // emerald-400
+      };
+    });
 
   // Colour legend for the factions present in this warzone.
   const factions = useMemo(() => {
@@ -1102,6 +1090,7 @@ function Warzone({
             <button
               key={p.key}
               onClick={() => setPlaystyle(p.key)}
+              title={p.description}
               className={`px-3 py-1 ${
                 playstyle === p.key
                   ? "bg-zinc-700 text-zinc-100"
@@ -1112,18 +1101,17 @@ function Warzone({
             </button>
           ))}
         </div>
+        {(() => {
+          const active = PLAYSTYLE_OPTIONS.find((p) => p.key === playstyle);
+          return active?.description ? (
+            <span className="text-xs text-zinc-600">{active.description}</span>
+          ) : null;
+        })()}
       </div>
-      {perspective && (
+      {perspective && hotspots.isLoading && (
         <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-zinc-600">
-          <span title="Insurgency corruption/suppression stage has no public ESI endpoint — only cartel kill activity can be shown here, not the corruption bar.">
-            Heat: friendly + enemy + cartel kill activity, last ~6h — cartel
-            activity shown, not corruption stage
-          </span>
-          {hotspots.isLoading && <span>Loading…</span>}
+          <span>Loading…</span>
         </div>
-      )}
-      {playstyle === "plexing" && perspective && (
-        <PlexingIncomePanel militia={perspective.myFaction} />
       )}
       <SearchFilterRow
         value={nameQuery}
@@ -1146,6 +1134,22 @@ function Warzone({
               }`}
             >
               {f.label}
+            </button>
+          ))}
+        </div>
+        <span className="text-xs text-zinc-500">Battlefield</span>
+        <div className="flex overflow-hidden rounded border border-zinc-700 text-sm">
+          {FW_BATTLEFIELD_FILTERS.map((b) => (
+            <button
+              key={b.key}
+              onClick={() => setBattlefieldFilter(b.key)}
+              className={`px-3 py-1 ${
+                battlefieldFilter === b.key
+                  ? "bg-zinc-700 text-zinc-100"
+                  : "text-zinc-400 hover:bg-zinc-800"
+              }`}
+            >
+              {b.label}
             </button>
           ))}
         </div>
@@ -1173,63 +1177,14 @@ function Warzone({
           {tableSystems.length} of {playstyleSystems.length} systems
         </span>
       </div>
-
-      {nearestFrontline && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <span className="text-xs text-zinc-500">Route to frontline</span>
-          <button
-            onClick={() =>
-              navigate("/route", {
-                state: {
-                  destination: {
-                    id: nearestFrontline.systemId,
-                    name: nearestFrontline.name,
-                  },
-                },
-              })
-            }
-            className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
-          >
-            {nearestFrontline.name} ({dist[String(nearestFrontline.systemId)]}j)
-          </button>
-          <div className="group relative">
-            <button
-              onClick={() =>
-                setWaypoint(nearestFrontline.systemId)
-                  .then(() => setFrontlineError(null))
-                  .catch((e) => {
-                    console.error(
-                      `Failed to set destination ${nearestFrontline.name}`,
-                      e,
-                    );
-                    setFrontlineError(
-                      `Couldn't set destination: ${errorMessage(e)}`,
-                    );
-                  })
-              }
-              aria-label="Set in-game waypoint to nearest frontline"
-              className="text-zinc-500 hover:text-indigo-400"
-            >
-              <Navigation size={14} />
-            </button>
-            <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 hidden -translate-x-1/2 whitespace-nowrap rounded bg-zinc-800 px-2 py-0.5 text-xs text-zinc-300 ring-1 ring-zinc-700 group-hover:block">
-              Set route
-            </span>
-          </div>
-          <InlineError
-            message={frontlineError}
-            className="text-xs text-rose-400"
-          />
-        </div>
-      )}
       <SystemTable
         systems={tableSystems}
         dist={dist}
         hasCharacter={hasCharacter}
         perspective={perspective}
+        playstyle={playstyle}
         farmScores={farmScores}
         showFarmScore={playstyle === "plexing"}
-        forcedSort={forcedSort}
         loginBaseline={loginBaseline}
         hotspotCounts={hotspotCounts}
         showHotspots={perspective != null}
@@ -1319,59 +1274,6 @@ function Warzone({
   );
 }
 
-/** Plexing-mode ISK/h estimate (#906). Reuses the lp-store module's
- *  existing `lpOffers` valuation (best ISK/LP at the militia's home LP
- *  store) — no pricing logic duplicated here. Recomputes whenever the
- *  selected militia (and therefore its LP store) changes, since `corpId`
- *  is part of the query key. Fails quiet: this is a supplementary estimate,
- *  not core functionality, so a stale price fetch or missing LP store
- *  offer just hides the panel rather than blocking the page. */
-function PlexingIncomePanel({ militia }: { militia: MilitiaFactionId }) {
-  const corpId = MILITIA_LP_CORP_ID[militia];
-  const { data, isLoading } = useQuery({
-    queryKey: ["lp-offers", corpId],
-    queryFn: () => lpOffers({ corporationId: corpId }),
-    staleTime: 10 * 60 * 1000,
-  });
-  const best = data?.rows[0];
-
-  if (isLoading) {
-    return (
-      <div className="mb-4 text-xs text-zinc-500">
-        Loading plexing income estimate…
-      </div>
-    );
-  }
-  if (!best) return null;
-
-  return (
-    <div className="mb-4 rounded border border-zinc-800 bg-zinc-900/50 p-3 text-xs text-zinc-400">
-      <div className="mb-1 font-medium text-zinc-300">
-        Plexing income estimate
-      </div>
-      <div className="flex flex-wrap gap-x-6 gap-y-1">
-        {(
-          Object.keys(
-            BATTLEFIELD_LP_MULTIPLIER,
-          ) as (keyof typeof BATTLEFIELD_LP_MULTIPLIER)[]
-        ).map((bf) => (
-          <span key={bf}>
-            {BATTLEFIELD_LABEL[bf] ?? bf}: ≈{" "}
-            <span className="text-emerald-300">
-              {formatIsk(plexingIskPerHour(bf, best.iskPerLp))}/h
-            </span>
-          </span>
-        ))}
-      </div>
-      <div className="mt-1 text-zinc-600">
-        Assumes {formatInt(ASSUMED_BASE_LP_PER_CAPTURE)} LP per a{" "}
-        {ASSUMED_CAPTURE_MINUTES}-minute Medium ADV-1 capture, best conversion:{" "}
-        {best.name} at {best.iskPerLp.toFixed(0)} ISK/LP.
-      </div>
-    </div>
-  );
-}
-
 /** Text colour for a faction-signed VP% delta cell: green when it's
  *  progress for the selected militia, red when it's progress for the
  *  enemy, muted zinc when flat or not yet known. */
@@ -1385,9 +1287,9 @@ function SystemTable({
   dist,
   hasCharacter,
   perspective,
+  playstyle,
   farmScores,
   showFarmScore,
-  forcedSort,
   loginBaseline,
   hotspotCounts,
   showHotspots,
@@ -1397,13 +1299,12 @@ function SystemTable({
   dist: Record<string, number>;
   hasCharacter: boolean;
   perspective: ActivePerspective;
+  /** Entering Plexing mode seeds a farm-score-desc sort (below); the header
+   *  row stays fully clickable/sortable afterwards, same as "all". */
+  playstyle: Playstyle;
   /** Plexing-mode farm score per system id (#904); empty outside that mode. */
   farmScores: Record<number, number>;
   showFarmScore: boolean;
-  /** Playstyle-forced sort (#904): PvP forces kills desc, Plexing forces
-   *  farmScore desc. `undefined` in "all" mode uses the persisted user sort
-   *  untouched — switching back to "all" resumes exactly where they left off. */
-  forcedSort?: { key: FwSortKey; dir: "asc" | "desc" };
   /** "Since login" VP baseline, for the Δ login column. */
   loginBaseline: ReadonlyMap<number, VpLoginBaseline>;
   /** Faction-scoped kill activity per system id, from the hotspots query. */
@@ -1413,15 +1314,24 @@ function SystemTable({
    *  stale "—"s for data that was never fetched. */
   showHotspots: boolean;
 }) {
-  const { sortKey, sortDir, toggleSort } = usePersistentSort<FwSortKey>(
-    "sort.fw-systems",
-    FW_SORT_KEYS,
-    "name",
-    "asc",
-    ["name", "region", "occupier"],
-  );
-  const effectiveSortKey = forcedSort?.key ?? sortKey;
-  const effectiveSortDir = forcedSort?.dir ?? sortDir;
+  const { sortKey, sortDir, toggleSort, setSort } =
+    usePersistentSort<FwSortKey>(
+      "sort.fw-systems",
+      FW_SORT_KEYS,
+      "name",
+      "asc",
+      ["name", "region", "occupier"],
+    );
+  // Seed farm-score-desc whenever Plexing mode is (re-)entered — the user's
+  // own clicks on the header row take over immediately after, exactly like
+  // "all" (#904 originally force-pinned this sort; that override is gone).
+  const prevPlaystyleRef = useRef<Playstyle | null>(null);
+  useEffect(() => {
+    if (playstyle === "plexing" && prevPlaystyleRef.current !== "plexing") {
+      setSort("farmScore", "desc");
+    }
+    prevPlaystyleRef.current = playstyle;
+  }, [playstyle, setSort]);
   const baseColumns = perspective ? FW_COLUMNS_PERSPECTIVE : FW_COLUMNS;
   let columns = baseColumns;
   if (showHotspots) columns = [...columns, HOTSPOT_COLUMN];
@@ -1478,18 +1388,18 @@ function SystemTable({
         hotspotActivity: hotspotTotal(hotspot),
       };
     });
-    return sortRows(augmented, effectiveSortKey, effectiveSortDir, {
+    return sortRows(augmented, sortKey, sortDir, {
       nullsLast:
-        effectiveSortKey === "hops" ||
-        effectiveSortKey === "vpVelocity" ||
-        effectiveSortKey === "vpDelta30mSigned" ||
-        effectiveSortKey === "vpDeltaLoginSigned",
+        sortKey === "hops" ||
+        sortKey === "vpVelocity" ||
+        sortKey === "vpDelta30mSigned" ||
+        sortKey === "vpDeltaLoginSigned",
     });
   }, [
     systems,
     dist,
-    effectiveSortKey,
-    effectiveSortDir,
+    sortKey,
+    sortDir,
     perspective,
     farmScores,
     loginBaseline,
@@ -1505,8 +1415,8 @@ function SystemTable({
               <SortHeaderCell
                 key={col.key}
                 column={col}
-                active={effectiveSortKey === col.key}
-                dir={effectiveSortDir}
+                active={sortKey === col.key}
+                dir={sortDir}
                 onClick={toggleSort}
               />
             ))}

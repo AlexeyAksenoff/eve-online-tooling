@@ -1,41 +1,14 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter } from "react-router-dom";
 import { invokeMock, mockInvoke, renderWithQuery } from "../../test/harness";
 import { FactionWarfarePage } from "./FactionWarfarePage";
 import type { FwSystemNode } from "../../lib/api";
 
-// FactionWarfarePage's "route to nearest frontline" action (#908) needs a
-// router context for useNavigate.
 function renderPage() {
   return renderWithQuery(
     <MemoryRouter>
       <FactionWarfarePage />
-    </MemoryRouter>,
-  );
-}
-
-/** Renders a real "/route" destination alongside the page, showing whatever
- *  state a navigate("/route", { state }) call handed it — verifies the full
- *  deep-link hand-off, not just that a button exists. */
-function RouteDestinationProbe() {
-  const location = useLocation();
-  const destination = (
-    location.state as { destination?: { id: number; name: string } } | null
-  )?.destination;
-  return (
-    <div data-testid="route-probe">
-      {destination ? `${destination.name} (${destination.id})` : "no state"}
-    </div>
-  );
-}
-function renderPageWithRoutes() {
-  return renderWithQuery(
-    <MemoryRouter initialEntries={["/"]}>
-      <Routes>
-        <Route path="/" element={<FactionWarfarePage />} />
-        <Route path="/route" element={<RouteDestinationProbe />} />
-      </Routes>
     </MemoryRouter>,
   );
 }
@@ -123,9 +96,9 @@ describe("FW warzone list filter", () => {
     expect(inTable().queryByText("VulnBurg")).not.toBeInTheDocument();
 
     fireEvent.click(
-      within(screen.getByText("Show").closest("div")!).getByRole("button", {
-        name: "All",
-      }),
+      within(
+        screen.getByText("Show").nextElementSibling as HTMLElement,
+      ).getByRole("button", { name: "All" }),
     );
     await waitFor(() =>
       expect(inTable().getByText("FightVille")).toBeInTheDocument(),
@@ -179,16 +152,20 @@ describe("FW name filter", () => {
 });
 
 describe("FW playstyle presets (#904)", () => {
-  it("PvP mode force-sorts the table by kills desc, ignoring the persisted sort", async () => {
+  it("Plexing mode hides rearguard systems, seeds a farm-score sort, and stays sortable via the header row", async () => {
     mockInvoke({
       intel_fw_stats: () => [],
       intel_fw_systems: () => ({
         nodes: [
-          node("QuietTown", "uncontested", 1, 500003, "Amarr", "frontline"),
+          // Low farm score (high kills) so it sorts behind AlphaSys once
+          // Plexing's farm-score-desc default kicks in, but ahead
+          // alphabetically — proves the "System" header click re-sorts.
           {
-            ...node("BusyFront", "contested", 2, 500003, "Amarr", "frontline"),
+            ...node("ZetaSys", "contested", 1, 500003, "Amarr", "frontline"),
             kills: 12,
           },
+          node("AlphaSys", "contested", 2, 500003, "Amarr", "frontline"),
+          node("RearSys", "uncontested", 3, 500003, "Amarr", "rearguard"),
         ],
         edges: [],
       }),
@@ -197,32 +174,7 @@ describe("FW playstyle presets (#904)", () => {
     });
     renderPage();
     await waitFor(() =>
-      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "PvP" }));
-    await waitFor(() => {
-      const rows = inTable().getAllByRole("row");
-      // Header row + BusyFront (12 kills) ahead of QuietTown (0 kills).
-      expect(within(rows[1]).getByText("BusyFront")).toBeInTheDocument();
-    });
-  });
-
-  it("Plexing mode hides rearguard systems and shows a farm score column", async () => {
-    mockInvoke({
-      intel_fw_stats: () => [],
-      intel_fw_systems: () => ({
-        nodes: [
-          node("FrontSys", "contested", 1, 500003, "Amarr", "frontline"),
-          node("RearSys", "uncontested", 2, 500003, "Amarr", "rearguard"),
-        ],
-        edges: [],
-      }),
-      auth_characters: () => [],
-      auth_active_character: () => null,
-    });
-    renderPage();
-    await waitFor(() =>
-      expect(inTable().getByText("FrontSys")).toBeInTheDocument(),
+      expect(inTable().getByText("AlphaSys")).toBeInTheDocument(),
     );
     expect(inTable().getByText("RearSys")).toBeInTheDocument();
     expect(
@@ -233,93 +185,27 @@ describe("FW playstyle presets (#904)", () => {
     await waitFor(() =>
       expect(inTable().queryByText("RearSys")).not.toBeInTheDocument(),
     );
-    expect(inTable().getByText("FrontSys")).toBeInTheDocument();
+    expect(inTable().getByText("AlphaSys")).toBeInTheDocument();
     expect(
       screen.getByRole("columnheader", { name: /Farm Score/i }),
     ).toBeInTheDocument();
-  });
-});
-
-describe("FW plexing income estimate (#906)", () => {
-  beforeEach(() => {
-    mockInvoke({
-      intel_fw_stats: () => [],
-      intel_fw_systems: () => ({ nodes: NODES, edges: [] }),
-      auth_characters: () => [],
-      auth_active_character: () => null,
-      lp_offers: () => ({
-        fetchedAt: 0,
-        rows: [
-          {
-            name: "Caldari Navy Hookbill",
-            quantity: 1,
-            lpCost: 5000,
-            iskCost: 0,
-            sellValue: 6_000_000,
-            cost: 5_500_000,
-            profit: 500_000,
-            iskPerLp: 100,
-          },
-        ],
-      }),
+    await waitFor(() => {
+      const rows = inTable().getAllByRole("row");
+      // Seeded farm-score-desc: AlphaSys (fewer kills, higher score) first.
+      expect(within(rows[1]).getByText("AlphaSys")).toBeInTheDocument();
     });
-  });
 
-  it("is hidden outside Plexing mode and in Observer mode", async () => {
-    renderPage();
-    await waitFor(() =>
-      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
-    );
-    expect(
-      screen.queryByText("Plexing income estimate"),
-    ).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Plexing" }));
-    // Still Observer — no militia, no LP store to price against.
-    expect(
-      screen.queryByText("Plexing income estimate"),
-    ).not.toBeInTheDocument();
-  });
-
-  it("shows ISK/h per battlefield class once a militia is selected in Plexing mode", async () => {
-    renderPage();
-    await waitFor(() =>
-      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Amarr Empire" }));
-    fireEvent.click(screen.getByRole("button", { name: "Plexing" }));
-
-    await waitFor(() =>
-      expect(screen.getByText("Plexing income estimate")).toBeInTheDocument(),
-    );
-    expect(screen.getByText(/Frontline:/)).toBeInTheDocument();
-    expect(screen.getByText(/Command Ops:/)).toBeInTheDocument();
-    expect(screen.getByText(/Rearguard:/)).toBeInTheDocument();
-    expect(
-      screen.getByText(/Caldari Navy Hookbill at 100 ISK\/LP/),
-    ).toBeInTheDocument();
-  });
-
-  it("recomputes against the new militia's LP store when the selection changes", async () => {
-    renderPage();
-    await waitFor(() =>
-      expect(inTable().getByText("QuietTown")).toBeInTheDocument(),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Amarr Empire" }));
-    fireEvent.click(screen.getByRole("button", { name: "Plexing" }));
-    await waitFor(() =>
-      expect(screen.getByText("Plexing income estimate")).toBeInTheDocument(),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Minmatar Republic" }));
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith(
-        "lp_offers",
-        expect.objectContaining({
-          params: expect.objectContaining({ corporationId: 1000182 }),
-        }),
-      ),
-    );
+    // Clicking the "System" header still re-sorts the table in Plexing mode.
+    fireEvent.click(screen.getByRole("columnheader", { name: /^System/i }));
+    await waitFor(() => {
+      const rows = inTable().getAllByRole("row");
+      expect(within(rows[1]).getByText("AlphaSys")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("columnheader", { name: /^System/i }));
+    await waitFor(() => {
+      const rows = inTable().getAllByRole("row");
+      expect(within(rows[1]).getByText("ZetaSys")).toBeInTheDocument();
+    });
   });
 });
 
@@ -944,85 +830,61 @@ describe("FW personal stats card", () => {
   });
 });
 
-describe("FW route to nearest frontline", () => {
-  const FRONTLINE_NODES = [
-    node("HomeFront", "contested", 50, 500003, "Amarr", "frontline"),
-    node("FarFront", "contested", 51, 500003, "Amarr", "frontline"),
-    node("EnemyFront", "contested", 52, 500002, "Minmatar", "frontline"),
+describe("FW battlefield filter", () => {
+  const BATTLEFIELD_NODES = [
+    node("FrontSys", "contested", 50, 500003, "Amarr", "frontline"),
+    node("CommandSys", "contested", 51, 500003, "Amarr", "commandops"),
+    node("RearSys", "uncontested", 52, 500003, "Amarr", "rearguard"),
   ];
 
-  it("is hidden in Observer mode and without a character", async () => {
+  it("filters the table to Frontlines or Command Post, independent of the Show filter", async () => {
     mockInvoke({
       intel_fw_stats: () => [],
-      intel_fw_systems: () => ({ nodes: FRONTLINE_NODES, edges: [] }),
+      intel_fw_systems: () => ({ nodes: BATTLEFIELD_NODES, edges: [] }),
       auth_characters: () => [],
       auth_active_character: () => null,
     });
     renderPage();
     await waitFor(() =>
-      expect(inTable().getByText("HomeFront")).toBeInTheDocument(),
+      expect(inTable().getByText("FrontSys")).toBeInTheDocument(),
     );
-    expect(screen.queryByText(/Route to frontline/)).not.toBeInTheDocument();
-  });
+    expect(inTable().getByText("CommandSys")).toBeInTheDocument();
+    expect(inTable().getByText("RearSys")).toBeInTheDocument();
 
-  it("picks the nearest friendly frontline and hands it to the Route module", async () => {
-    mockInvoke({
-      intel_fw_stats: () => [],
-      intel_fw_systems: () => ({ nodes: FRONTLINE_NODES, edges: [] }),
-      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
-      auth_active_character: () => 1,
-      intel_fw_enlistment: () => 500003,
-      intel_fw_jumps: () => ({
-        characterSystemId: 1,
-        // HomeFront closer (3j) than FarFront (7j); EnemyFront (1j) is the
-        // enemy's, must never be picked despite being nearest overall.
-        jumps: { "50": 3, "51": 7, "52": 1 },
-      }),
-      intel_fw_personal_stats: () => ({ stats: null, missingScope: false }),
-    });
-    renderPageWithRoutes();
-    await waitFor(() =>
-      expect(screen.getByText(/HomeFront \(3j\)/)).toBeInTheDocument(),
-    );
-    // FarFront legitimately appears in the table/map too — only the route
-    // button's "(Nj)" pick needs to exclude it.
-    expect(screen.queryByText(/FarFront \(\d+j\)/)).not.toBeInTheDocument();
+    // "Battlefield" also labels a table column — grab the filter-row span.
+    const battlefieldGroup = () =>
+      screen.getAllByText("Battlefield").find((el) => el.tagName === "SPAN")!
+        .nextElementSibling as HTMLElement | null;
 
-    fireEvent.click(screen.getByText(/HomeFront \(3j\)/));
-    await waitFor(() =>
-      expect(screen.getByTestId("route-probe")).toHaveTextContent(
-        "HomeFront (50)",
-      ),
-    );
-  });
-
-  it("also offers the in-game waypoint action", async () => {
-    mockInvoke({
-      intel_fw_stats: () => [],
-      intel_fw_systems: () => ({ nodes: FRONTLINE_NODES, edges: [] }),
-      auth_characters: () => [{ characterId: 1, name: "Bob", scopes: [] }],
-      auth_active_character: () => 1,
-      intel_fw_enlistment: () => 500003,
-      intel_fw_jumps: () => ({
-        characterSystemId: 1,
-        jumps: { "50": 3, "51": 7, "52": 1 },
-      }),
-      intel_fw_personal_stats: () => ({ stats: null, missingScope: false }),
-      esi_set_waypoint: () => undefined,
-    });
-    renderPage();
-    await waitFor(() =>
-      expect(screen.getByText(/HomeFront \(3j\)/)).toBeInTheDocument(),
-    );
     fireEvent.click(
-      screen.getByRole("button", {
-        name: "Set in-game waypoint to nearest frontline",
+      within(battlefieldGroup()!).getByRole("button", {
+        name: "Frontlines",
       }),
     );
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("esi_set_waypoint", {
-        systemId: 50,
+      expect(inTable().queryByText("CommandSys")).not.toBeInTheDocument(),
+    );
+    expect(inTable().queryByText("RearSys")).not.toBeInTheDocument();
+    expect(inTable().getByText("FrontSys")).toBeInTheDocument();
+
+    fireEvent.click(
+      within(battlefieldGroup()!).getByRole("button", {
+        name: "Command Post",
       }),
     );
+    await waitFor(() =>
+      expect(inTable().queryByText("FrontSys")).not.toBeInTheDocument(),
+    );
+    expect(inTable().getByText("CommandSys")).toBeInTheDocument();
+    expect(inTable().queryByText("RearSys")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      within(battlefieldGroup()!).getByRole("button", { name: "All" }),
+    );
+    await waitFor(() =>
+      expect(inTable().getByText("RearSys")).toBeInTheDocument(),
+    );
+    expect(inTable().getByText("FrontSys")).toBeInTheDocument();
+    expect(inTable().getByText("CommandSys")).toBeInTheDocument();
   });
 });
