@@ -39,3 +39,10 @@ export const FACTION_WARFARE_JUMP_DISTANCE_REFRESH_MS = 90_000;
  * optimal-range and drone-reminder data current without polling ESI harder
  * than the underlying data changes. */
 export const FIGHT_OVERLAY_SHIP_POLL_INTERVAL_MS = 30_000;
+
+/** Release check (Settings page + sidebar badge): how long the frontend
+ * trusts its own last answer before invoking the Tauri command again within
+ * a session. The Rust side has its own disk-backed ETag cache on top of
+ * this, so a shorter value here just saves an IPC round-trip, not a network
+ * call — releases are infrequent, so there's no reason to re-ask hourly. */
+export const RELEASE_CHECK_STALE_TIME_MS = 6 * 60 * 60 * 1000;

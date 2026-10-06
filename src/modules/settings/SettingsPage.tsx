@@ -1,7 +1,10 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { errorMessage } from "../../lib/api";
 import { Page, PageHeader } from "../../components/page";
 import { useFightOverlay } from "../pvp/fightOverlayContext";
 import { useFwHomeDefense } from "../faction-warfare/fwHomeDefenseContext";
 import type { NearbyFlipRadius } from "../faction-warfare/homeDefenseAlerts";
+import { useCheckForUpdatesEnabled, useReleaseCheck } from "./useReleaseCheck";
 
 const NEARBY_FLIP_OPTIONS: readonly { key: NearbyFlipRadius; label: string }[] =
   [
@@ -31,6 +34,8 @@ export function SettingsPage() {
     nearbyFlipRadius,
     setNearbyFlipRadius,
   } = useFwHomeDefense();
+  const [checkForUpdates, setCheckForUpdates] = useCheckForUpdatesEnabled();
+  const release = useReleaseCheck(checkForUpdates);
 
   return (
     <Page>
@@ -111,6 +116,75 @@ export function SettingsPage() {
                 {o.label}
               </button>
             ))}
+          </div>
+        </div>
+        <div className="flex items-start justify-between gap-4 p-4">
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-zinc-100">
+              Check for updates
+            </span>
+            <span className="mt-0.5 block text-xs text-zinc-500">
+              On startup, check GitHub for a newer release (one request to
+              github.com, no account/usage data sent). Off still lets you check
+              manually below.
+            </span>
+            <span className="mt-1 block text-xs">
+              {release.isFetching && (
+                <span className="text-zinc-500">Checking…</span>
+              )}
+              {!release.isFetching && release.isError && (
+                <span className="text-rose-400">
+                  Couldn't check: {errorMessage(release.error)}
+                </span>
+              )}
+              {!release.isFetching && !release.isError && release.data && (
+                <span
+                  className={
+                    release.data.isOutdated
+                      ? "text-emerald-400"
+                      : "text-zinc-500"
+                  }
+                >
+                  {release.data.isOutdated
+                    ? `v${release.data.latestVersion} is available (you're on v${release.data.currentVersion})`
+                    : `Up to date (v${release.data.currentVersion})`}
+                </span>
+              )}
+              {!release.isFetching &&
+                !release.isError &&
+                !release.data &&
+                !checkForUpdates && (
+                  <span className="text-zinc-600">Not checked yet</span>
+                )}
+              {release.data?.isOutdated && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void openUrl(release.data!.htmlUrl).catch(() => {})
+                  }
+                  className="ml-2 rounded border border-zinc-700 px-1.5 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+                >
+                  View release
+                </button>
+              )}
+            </span>
+          </span>
+          <div className="mt-1 flex shrink-0 items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void release.refetch()}
+              disabled={release.isFetching}
+              className="rounded border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-50"
+            >
+              Check now
+            </button>
+            <input
+              type="checkbox"
+              checked={checkForUpdates}
+              onChange={(e) => setCheckForUpdates(e.currentTarget.checked)}
+              className="h-4 w-4 shrink-0 cursor-pointer accent-indigo-500"
+              aria-label="Check for updates on startup"
+            />
           </div>
         </div>
       </div>
