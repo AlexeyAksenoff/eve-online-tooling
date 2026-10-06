@@ -276,7 +276,7 @@ function SystemNode({ data, selected }: NodeProps<Node<SystemNodeData>>) {
         </NodeToolbar>
       )}
       <div
-        className={`rounded border px-3 py-1.5 text-xs shadow ${
+        className={`${data.current ? "rounded-full px-6 py-2" : "rounded px-3 py-1.5"} border text-xs shadow ${
           filled
             ? "font-semibold"
             : data.accent

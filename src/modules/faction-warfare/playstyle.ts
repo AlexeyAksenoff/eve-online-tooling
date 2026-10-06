@@ -2,14 +2,23 @@ import type { FwSystemNode } from "../../lib/api";
 
 /**
  * Playstyle presets (#904): "all" is today's behaviour (unfiltered,
- * user-controlled sort). "pvp" and "plexing" re-sort/re-filter the existing
- * view — they aren't separate pages.
+ * user-controlled sort). "plexing" re-filters the existing view to the
+ * systems worth plexing and seeds a farm-score sort — it isn't a separate
+ * page, and the header row stays fully sortable afterwards, same as "all".
  */
-export type Playstyle = "all" | "pvp" | "plexing";
-export const PLAYSTYLE_OPTIONS: readonly { key: Playstyle; label: string }[] = [
+export type Playstyle = "all" | "plexing";
+export const PLAYSTYLE_OPTIONS: readonly {
+  key: Playstyle;
+  label: string;
+  description?: string;
+}[] = [
   { key: "all", label: "All" },
-  { key: "pvp", label: "PvP" },
-  { key: "plexing", label: "Plexing" },
+  {
+    key: "plexing",
+    label: "Plexing",
+    description:
+      "Hides rearguard systems and ranks the rest by farm score — high VP progress, few recent kills, close to you — so the best system to plex next sorts to the top.",
+  },
 ];
 
 /**
