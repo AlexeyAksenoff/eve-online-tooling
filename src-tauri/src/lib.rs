@@ -16,6 +16,7 @@
 //! - [`lists`]    — persisted type-id lists (blacklist/favorites)
 //! - [`evescout`] — EVE-Scout public Thera/Turnur wormhole connections
 //! - [`net`]      — cross-cutting network helpers (provider-agnostic conditional HTTP cache)
+//! - [`release_check`] — checks the running build against the latest GitHub Release
 //!
 //! Feature modules live under [`modules`]; the frontend registry in
 //! `src/modules/registry.ts` is the canonical catalogue of them.
@@ -34,6 +35,7 @@ mod model;
 mod modules;
 mod net;
 mod plugins;
+mod release_check;
 mod sde;
 mod storage;
 mod util;
@@ -444,6 +446,7 @@ pub fn run() {
             info::info_list,
             info::info_clear,
             info::info_clear_source,
+            release_check::release_check_latest,
             modules::feedback::commands::feedback_status,
             modules::feedback::commands::feedback_preview,
             modules::feedback::commands::feedback_submit,

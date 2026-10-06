@@ -24,6 +24,10 @@ import { usePersistentState } from "../lib/usePersistentState";
 import { useInfoAlerts } from "../modules/info/infoContext";
 import { useFightOverlay } from "../modules/pvp/fightOverlayContext";
 import { scriptsList } from "../lib/api";
+import {
+  useCheckForUpdatesEnabled,
+  useReleaseCheck,
+} from "../modules/settings/useReleaseCheck";
 import appIcon from "../assets/app-icon.png";
 
 const PINS_KEY = STORAGE_KEYS.sidebarPins;
@@ -572,6 +576,7 @@ function NavRow({
           </span>
         )}
         {module.id === "scripts" && <ScriptsBadge />}
+        {module.id === "settings" && <UpdateBadge />}
       </NavLink>
       <ColorPicker
         title={module.title}
@@ -613,6 +618,25 @@ function ScriptsBadge() {
     >
       {runningScripts}
     </span>
+  );
+}
+
+/**
+ * "An update is available" dot on the Settings nav row — mounted once here
+ * so its query runs once total instead of once per nav row. Shares the
+ * `["release-check"]` query cache with the Settings page itself, so opening
+ * Settings never re-triggers the check this already ran. Respects the
+ * opt-out toggle: no toggle, no query, no call.
+ */
+function UpdateBadge() {
+  const [checkForUpdates] = useCheckForUpdatesEnabled();
+  const release = useReleaseCheck(checkForUpdates);
+  if (!release.data?.isOutdated) return null;
+  return (
+    <span
+      title={`v${release.data.latestVersion} is available`}
+      className="ml-auto h-2 w-2 shrink-0 rounded-full bg-emerald-500"
+    />
   );
 }
 

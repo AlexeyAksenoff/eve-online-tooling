@@ -1,5 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -262,5 +268,50 @@ describe("Layout sidebar", () => {
     renderLayout();
     const scriptsLink = await screen.findByRole("link", { name: /scripts/i });
     expect(await within(scriptsLink).findByText("1")).toBeInTheDocument();
+  });
+
+  it("badges the Settings nav entry when an update is available, not when up to date", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: unknown) => {
+      if (cmd === "release_check_latest") {
+        return Promise.resolve({
+          currentVersion: "0.71.0",
+          latestVersion: "0.72.0",
+          isOutdated: true,
+          htmlUrl:
+            "https://github.com/th-lange/eve-online-tooling/releases/tag/v0.72.0",
+          publishedAt: "2026-02-01T00:00:00Z",
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    renderLayout();
+    const settingsLink = await screen.findByRole("link", { name: /settings/i });
+    expect(
+      await within(settingsLink).findByTitle("v0.72.0 is available"),
+    ).toBeInTheDocument();
+  });
+
+  it("doesn't badge the Settings nav entry when already up to date", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: unknown) => {
+      if (cmd === "release_check_latest") {
+        return Promise.resolve({
+          currentVersion: "0.71.0",
+          latestVersion: "0.71.0",
+          isOutdated: false,
+          htmlUrl:
+            "https://github.com/th-lange/eve-online-tooling/releases/tag/v0.71.0",
+          publishedAt: "2026-01-01T00:00:00Z",
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    renderLayout();
+    const settingsLink = await screen.findByRole("link", { name: /settings/i });
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("release_check_latest"),
+    );
+    expect(
+      within(settingsLink).queryByTitle(/is available/),
+    ).not.toBeInTheDocument();
   });
 });
