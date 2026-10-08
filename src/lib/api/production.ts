@@ -45,6 +45,17 @@ export async function productionSystemCostIndex(
   return unwrapCommand(await commands.productionSystemCostIndex(systemId));
 }
 
+/** The raw SDE system security (−1.0…+1.0) for the station's solar system, so
+ *  the UI can auto-derive the security tier (Highsec/Lowsec/Nullsec/WH) instead
+ *  of trusting a hand-picked dropdown. `null` for Upwell structures (which
+ *  aren't in `staStations`) — the caller then falls back to region-based WH
+ *  detection. */
+export async function productionStationSecurity(
+  stationId: number,
+): Promise<number | null> {
+  return unwrapCommand(await commands.productionStationSecurity(stationId));
+}
+
 /** All industry rigs for one facility type, filtered to those whose slot size
  *  exactly matches `maxRigSize` (the size of the slot the chosen structure
  *  provides). `facilityType` selects refinery/reactor rigs (Reactions) vs.

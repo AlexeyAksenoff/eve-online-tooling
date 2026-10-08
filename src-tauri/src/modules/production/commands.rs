@@ -905,6 +905,32 @@ pub async fn production_system_cost_index(
     Ok(map.get(&system_id).copied())
 }
 
+/// The raw SDE solar-system security (−1.0 … +1.0) for the system an NPC
+/// station sits in, resolved via `staStations → mapSolarSystems`. `None` when
+/// the station isn't in `staStations` (e.g. an Upwell structure) or the
+/// system is unknown — the caller falls back to region-based detection for
+/// WH space.
+#[tauri::command]
+#[specta::specta]
+pub fn production_station_security(
+    app: AppHandle,
+    station_id: i64,
+) -> Result<Option<f64>, AppError> {
+    if station_id <= 0 {
+        return Ok(None);
+    }
+    let sde = crate::sde::open_from_app(&app)?;
+    if let Some((system_id, _)) = sde
+        .station_location(station_id)
+        .map_err(|e| e.to_string())?
+    {
+        if let Some(info) = sde.system_info(system_id).map_err(|e| e.to_string())? {
+            return Ok(Some(info.security));
+        }
+    }
+    Ok(None)
+}
+
 /// Collects this module's specta-annotated commands for [`crate::bindings`].
 pub fn specta_commands() -> tauri_specta::Commands<tauri::Wry> {
     tauri_specta::collect_commands![
@@ -913,6 +939,7 @@ pub fn specta_commands() -> tauri_specta::Commands<tauri::Wry> {
         production_get_list,
         production_set_list,
         production_system_cost_index,
+        production_station_security,
         production_rigs,
         production_rig_bonuses,
     ]

@@ -39,7 +39,7 @@ function baseInput(
     me: 0,
     useOwnedMe: false,
     ownedMe: {},
-        te: 0,
+    te: 0,
     ownedTe: {},
     componentMe: 0,
     componentTe: 0,

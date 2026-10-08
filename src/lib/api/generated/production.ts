@@ -95,6 +95,26 @@ export const commands = {
     }
   },
   /**
+   * The raw SDE solar-system security (−1.0 … +1.0) for the system an NPC
+   * station sits in, resolved via `staStations → mapSolarSystems`. `None` when
+   * the station isn't in `staStations` (e.g. an Upwell structure) or the
+   * system is unknown — the caller falls back to region-based detection for
+   * WH space.
+   */
+  async productionStationSecurity(
+    stationId: number,
+  ): Promise<Result<number | null, AppError>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("production_station_security", { stationId }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as AppError };
+    }
+  },
+  /**
    * All industry rigs for one facility type, readable right now. Rigs are
    * filtered to those whose slot size exactly matches `max_rig_size` (the size
    * of the slot the chosen structure exposes — a rig only fits a slot of its
