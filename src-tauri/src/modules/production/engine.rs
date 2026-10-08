@@ -639,8 +639,9 @@ pub facility_profiles: Option<FacilityProfiles>,
     /// Owned blueprint ME per type id (for per-blueprint ME override). Used
     /// for sub-component ME when `build_components` is true.
     pub owned_me: HashMap<i64, i64>,
-    /// Owned blueprint TE per type id (for per-blueprint TE override). Used
-    /// for sub-component TE when `build_components` is true.
+        /// Owned blueprint TE per type id (reserved for future TE sub-component
+    /// resolution; ME is used in build_unit_cost, TE applied via step time).
+    #[allow(dead_code)]
     pub owned_te: HashMap<i64, i64>,
 }
 
@@ -696,7 +697,9 @@ impl Default for ProfitConfig {
     }
 }
 
+#[allow(dead_code)]
 impl ProfitConfig {
+    #[allow(dead_code)]
     /// ME multiplier for a build step: the facility profile's value if profiles
     /// are configured, otherwise the flat `me_bonus` field (backward compat).
     pub fn me_bonus_for(&self, activity: Activity) -> f64 {
