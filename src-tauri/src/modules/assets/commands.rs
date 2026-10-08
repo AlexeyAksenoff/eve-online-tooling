@@ -7,9 +7,11 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 use crate::esi::{
-    corporation_id, fetch_assets, fetch_corp_assets, resolve_names, AuthState, RawAsset,
+    corporation_id, fetch_assets, fetch_corp_assets, fetch_structure_info, resolve_names,
+    AuthState, RawAsset,
 };
 use crate::market::{default_region_id, resolve_location, MarketService, PriceModel};
+use crate::sde::NameMap;
 use crate::storage;
 
 /// Jita IV-4 in The Forge — the reference market all valuation prices against.
@@ -293,6 +295,33 @@ fn value_nodes(
     (out, total_value, total_volume)
 }
 
+/// Resolve a location id to `(station/structure name, solar-system name)`,
+/// consulting three sources in priority order:
+///
+/// 1. SDE `staStations` — NPC station names (e.g. "Jita IV - Moon 4 - …").
+/// 2. ESI `universe/structures/{id}` — player structure (citadel/upweller)
+///    names + their solar system id.
+/// 3. A generic fallback label ("Structure {id}" or "Location {id}").
+///
+/// Extracted from the `loc_info` closure in [`assets_load`] so it can be
+/// unit-tested without spinning up a Tauri command.
+fn resolve_location_label(
+    id: i64,
+    station_infos: &HashMap<i64, (String, i64)>,
+    structure_info: &HashMap<i64, (String, i64)>,
+    system_names: &NameMap,
+) -> (String, Option<String>) {
+    if let Some((name, sys_id)) = station_infos.get(&id) {
+        (name.clone(), system_names.get(sys_id).cloned())
+    } else if let Some((name, sys_id)) = structure_info.get(&id) {
+        (name.clone(), system_names.get(sys_id).cloned())
+    } else if id >= STRUCTURE_ID_MIN {
+        (format!("Structure {id}"), None)
+    } else {
+        (format!("Location {id}"), None)
+    }
+}
+
 // --- Single unified command ---
 
 /// Load the roster's assets once — ESI fetch (or cache hit), price at Jita,
@@ -389,16 +418,31 @@ pub async fn assets_load(
         .collect();
     let station_infos = sde.station_infos(&root_ids).map_err(|e| e.to_string())?;
 
-    // Two closures that share the same station_infos / system_names refs:
-    // one for the flat view (needs solar system too), one for the tree (name only).
-    let loc_info = |id: i64| -> (String, Option<String>) {
-        if let Some((name, sys_id)) = station_infos.get(&id) {
-            (name.clone(), system_names.get(sys_id).cloned())
-        } else if id >= STRUCTURE_ID_MIN {
-            (format!("Structure {id}"), None)
-        } else {
-            (format!("Location {id}"), None)
+    // Player structures (citadels / upwellers, id ≥ 1 trillion) aren't in the
+    // SDE — resolve their names + home system via authenticated ESI so the UI
+    // can show "My Fortizar" instead of "Structure 1035000000001". One request
+    // per structure, issued concurrently. A 403 (structure not accessible to
+    // the character) or a not-logged-in character leaves the entry absent and
+    // the caller falls through to the generic fallback label.
+    let structure_ids: Vec<i64> = root_ids
+        .iter()
+        .copied()
+        .filter(|&id| id >= STRUCTURE_ID_MIN)
+        .collect();
+    let structure_info = if structure_ids.is_empty() {
+        HashMap::new()
+    } else {
+        match storage::primary_character(&dir) {
+            Some(char_id) => fetch_structure_info(&auth_state, char_id, &structure_ids).await,
+            None => HashMap::new(),
         }
+    };
+
+    // Two closures that share the same station_infos / structure_info /
+    // system_names refs: one for the flat view (needs solar system too), one
+    // for the tree (name only).
+    let loc_info = |id: i64| -> (String, Option<String>) {
+        resolve_location_label(id, &station_infos, &structure_info, &system_names)
     };
     let loc_name = |id: i64| -> String { loc_info(id).0 };
 
@@ -525,5 +569,85 @@ mod tests {
         let ship = station.children.iter().find(|n| n.id == 1).unwrap();
         assert_eq!(ship.children.len(), 1);
         assert_eq!(ship.children[0].id, 2);
+    }
+
+    #[test]
+    fn resolves_npc_station_from_sde() {
+        let station_infos: HashMap<i64, (String, i64)> = HashMap::from([(
+            60003760,
+            (
+                "Jita IV - Moon 4 - Caldari Navy Assembly Plant".into(),
+                30000142,
+            ),
+        )]);
+        let system_names: NameMap = HashMap::from([(30000142, "Jita".into())]);
+        let empty = HashMap::new();
+        let (name, system) =
+            resolve_location_label(60003760, &station_infos, &empty, &system_names);
+        assert_eq!(name, "Jita IV - Moon 4 - Caldari Navy Assembly Plant");
+        assert_eq!(system.as_deref(), Some("Jita"));
+    }
+
+    #[test]
+    fn resolves_player_structure_from_esi() {
+        let structure_id = 1_000_000_000_001;
+        let structure_info: HashMap<i64, (String, i64)> =
+            HashMap::from([(structure_id, ("My Fortizar".into(), 30000142))]);
+        let system_names: NameMap = HashMap::from([(30000142, "Jita".into())]);
+        let empty = HashMap::new();
+        let (name, system) =
+            resolve_location_label(structure_id, &empty, &structure_info, &system_names);
+        assert_eq!(name, "My Fortizar");
+        assert_eq!(system.as_deref(), Some("Jita"));
+    }
+
+    #[test]
+    fn falls_back_to_structure_label_when_esi_misses() {
+        let structure_id = 1_000_000_000_002;
+        let empty = HashMap::new();
+        let system_names: NameMap = HashMap::new();
+        let (name, system) = resolve_location_label(structure_id, &empty, &empty, &system_names);
+        assert_eq!(name, format!("Structure {structure_id}"));
+        assert!(system.is_none());
+    }
+
+    #[test]
+    fn falls_back_to_location_label_for_non_station_non_structure() {
+        let ship_id = 1234567; // < STRUCTURE_ID_MIN and not in station_infos
+        let empty = HashMap::new();
+        let system_names: NameMap = HashMap::new();
+        let (name, system) = resolve_location_label(ship_id, &empty, &empty, &system_names);
+        assert_eq!(name, format!("Location {ship_id}"));
+        assert!(system.is_none());
+    }
+
+    #[test]
+    fn sde_station_takes_priority_over_esi_structure() {
+        let id = 60003760;
+        let station_infos: HashMap<i64, (String, i64)> =
+            HashMap::from([(id, ("Station via SDE".into(), 30000142))]);
+        let structure_info: HashMap<i64, (String, i64)> =
+            HashMap::from([(id, ("Structure via ESI".into(), 30000144))]);
+        let system_names: NameMap =
+            HashMap::from([(30000142, "Jita".into()), (30000144, "Perimeter".into())]);
+        let (name, system) =
+            resolve_location_label(id, &station_infos, &structure_info, &system_names);
+        assert_eq!(name, "Station via SDE");
+        assert_eq!(system.as_deref(), Some("Jita"));
+    }
+
+    #[test]
+    fn structure_in_unknown_system_still_shows_name() {
+        let structure_id = 1_000_000_000_003;
+        let structure_info: HashMap<i64, (String, i64)> = HashMap::from([(
+            structure_id,
+            ("Deep Space Annex".into(), 30001775), // system not in system_names
+        )]);
+        let empty = HashMap::new();
+        let system_names: NameMap = HashMap::new();
+        let (name, system) =
+            resolve_location_label(structure_id, &empty, &structure_info, &system_names);
+        assert_eq!(name, "Deep Space Annex");
+        assert!(system.is_none()); // system not in the SDE cache yet
     }
 }
