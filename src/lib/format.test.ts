@@ -50,6 +50,7 @@ function row(
     productPrice: null,
     materials: [],
     missingPrices: [],
+    reactions: { lines: [], totalInstallCost: 0 },
   };
 }
 

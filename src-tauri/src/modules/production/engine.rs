@@ -877,6 +877,44 @@ pub struct MaterialLine {
     pub excess_quantity: i64,
 }
 
+/// One reagent within a [`ReactionLine`]: quantity needed across all reaction
+/// runs + its cost. Reaction materials have **no ME** in EVE (ME only applies
+/// to manufacturing), so `required = base_quantity × runs`.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactionInputLine {
+    pub type_id: i64,
+    pub name: String,
+    pub required_quantity: i64,
+    /// Unit price used (material basis), for the UI's per-line cost.
+    pub unit_price: Option<f64>,
+    pub line_cost: f64,
+}
+
+/// A single reaction start in the plan: which formula, how many runs, and its
+/// full reagent requirement.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactionLine {
+    pub blueprint_type_id: i64,
+    pub product_type_id: i64,
+    pub product_name: String,
+    pub product_per_run: i64,
+    pub runs: i64,
+    pub inputs: Vec<ReactionInputLine>,
+}
+
+/// Full reaction plan extracted from a build tree — every Reaction sub-step
+/// (composite / molecular / polymer / biochemical formulas), how many times it
+/// must run, and its reagents. `total_install_cost` is the summed job fee
+/// already captured in [`ProfitBreakdown::reaction_install_cost`].
+#[derive(Debug, Clone, Default, Serialize, PartialEq, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactionPlan {
+    pub lines: Vec<ReactionLine>,
+    pub total_install_cost: f64,
+}
+
 /// Invention cost detail for the drill-down (T2 items).
 #[derive(Debug, Clone, Serialize, PartialEq, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -965,6 +1003,11 @@ fn build_unit_cost(
 /// a build tree. Used to populate `reaction_install_cost` in `ProfitBreakdown`.
 /// Each Reaction node's EIV is computed from its base-quantity inputs at
 /// adjusted price, then passed through the profile-aware [`job_fee`].
+///
+/// Test-only now that [`collect_reactions`] does the full walk (this helper is
+/// kept for the `sum_reaction_install_cost_sums_sub_build_reaction_fees` test).
+#[cfg(test)]
+#[allow(dead_code)]
 fn sum_reaction_install_cost(
     step: &BuildStep,
     prices: &HashMap<i64, PriceModel>,
@@ -989,6 +1032,74 @@ fn sum_reaction_install_cost(
         }
     }
     total
+}
+
+/// Recursively walk a build tree and collect every Reaction sub-step into
+/// `collected`, calculating how many runs each needs from the top-level `needed`
+/// (units of the root product). Reaction materials have no ME in EVE, so
+/// `required = base_quantity × runs`. Returns the total install cost (job fees)
+/// for the collected reactions. Profile-aware (each Reaction step selects the
+/// reaction facility profile via `config`).
+fn collect_reactions(
+    step: &BuildStep,
+    config: &ProfitConfig,
+    prices: &HashMap<i64, PriceModel>,
+    needed: i64,
+    depth: u32,
+    collected: &mut Vec<ReactionLine>,
+) -> f64 {
+    if depth == 0 {
+        return 0.0;
+    }
+    let mut install_cost = 0.0;
+    if step.activity == Activity::Reaction && step.product_per_run > 0 {
+        let runs = ceil_div(needed, step.product_per_run);
+        let mut inputs = Vec::with_capacity(step.inputs.len());
+        let mut eiv = 0.0;
+        for input in &step.inputs {
+            // No ME for reaction materials — plain base_quantity × runs.
+            let req = input.base_quantity.saturating_mul(runs);
+            let model = prices.get(&input.type_id);
+            let unit_price = price_for(model, config.material_basis);
+            let line_cost = unit_price.unwrap_or(0.0) * req as f64;
+            eiv += eiv_unit_value(model) * input.base_quantity as f64 * runs as f64;
+            inputs.push(ReactionInputLine {
+                type_id: input.type_id,
+                name: input.name.clone(),
+                required_quantity: req,
+                unit_price,
+                line_cost,
+            });
+        }
+        let fee = job_fee(eiv, config, step);
+        install_cost += fee;
+        collected.push(ReactionLine {
+            blueprint_type_id: step.blueprint_type_id,
+            product_type_id: step.product_type_id,
+            product_name: step.product_name.clone(),
+            product_per_run: step.product_per_run,
+            runs,
+            inputs,
+        });
+    }
+    for input in &step.inputs {
+        if let Sourcing::Build(sub) = &input.sourcing {
+            // Pass down the needed units for the sub-product: the parent's
+            // `needed` output requires `needed × base_quantity / product_per_run`
+            // units of the input (ceil-divided, since inputs are whole units).
+            let needed_sub = if step.product_per_run > 0 {
+                ceil_div(
+                    needed.saturating_mul(input.base_quantity),
+                    step.product_per_run,
+                )
+            } else {
+                0
+            };
+            install_cost +=
+                collect_reactions(sub, config, prices, needed_sub, depth - 1, collected);
+        }
+    }
+    install_cost
 }
 
 /// The result of evaluating a build step.
@@ -1062,6 +1173,10 @@ pub struct ProfitBreakdown {
     pub materials: Vec<MaterialLine>,
     /// Type ids we could not price; the row's numbers are incomplete when set.
     pub missing_prices: Vec<i64>,
+    /// Reaction starts needed to build this product's T3/reacted components
+    /// (empty when no reactions are in the tree).
+    #[serde(default)]
+    pub reactions: ReactionPlan,
 }
 
 /// ME-adjusted required quantity of a material for `runs` runs. `me_bonus` is the
@@ -1375,9 +1490,19 @@ pub fn evaluate_with_stock(
         0.0
     };
 
-    // Reaction install cost: sum of job fees for all Reaction sub-steps in the
-    // build tree (reaction formulas nested under this manufacturing product).
-    let reaction_install = sum_reaction_install_cost(step, prices, config, MAX_BUILD_DEPTH);
+    // Reaction plan: collect every Reaction sub-step in the build tree and
+    // calculate how many runs each needs (reactions have no ME). The plan's
+    // install cost == the sum-of-job-fees already tracked here as
+    // `reaction_install_cost`.
+    let mut reactions = Vec::new();
+    let reaction_install = collect_reactions(
+        step,
+        config,
+        prices,
+        units_produced,
+        MAX_BUILD_DEPTH,
+        &mut reactions,
+    );
 
     ProfitBreakdown {
         blueprint_type_id: step.blueprint_type_id,
@@ -1394,6 +1519,10 @@ pub fn evaluate_with_stock(
         manufacturing_time_seconds: 0.0,
         reaction_install_cost: reaction_install,
         reaction_time_seconds: 0.0,
+        reactions: ReactionPlan {
+            lines: reactions,
+            total_install_cost: reaction_install,
+        },
         approximate: config.is_approximate(),
         blueprint_cost,
         invention_cost,

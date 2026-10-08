@@ -15,6 +15,8 @@ use crate::model::AppError;
 use crate::sde::Sde;
 use crate::storage;
 
+#[cfg(test)]
+use super::engine::ReactionPlan;
 use super::engine::{
     evaluate_with_stock, manufacturing_step, Activity, BuildStep, InputLine, Invention, PriceBasis,
     ProfitBreakdown, ProfitConfig, Sourcing,
@@ -1270,6 +1272,10 @@ mod reprice_tests {
             manufacturing_time_seconds: 0.0,
             reaction_install_cost: 0.0,
             reaction_time_seconds: 0.0,
+            reactions: ReactionPlan {
+                lines: vec![],
+                total_install_cost: 0.0,
+            },
             approximate: false,
             blueprint_cost: 0.0,
             invention_cost: 0.0,

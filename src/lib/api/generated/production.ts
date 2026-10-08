@@ -515,6 +515,11 @@ export type ProfitBreakdown = {
    * Type ids we could not price; the row's numbers are incomplete when set.
    */
   missingPrices: number[];
+  /**
+   * Reaction starts needed to build this product's T3/reacted components
+   * (empty when no reactions are in the tree).
+   */
+  reactions: ReactionPlan;
 };
 /**
  * Parameters for the production ranking. Everything here affects pricing/cost,
@@ -649,6 +654,40 @@ export type ProfitParams = {
    */
   ignoreBuildGroups?: number[];
 };
+/**
+ * One reagent within a [`ReactionLine`]: quantity needed across all reaction
+ * runs + its cost. Reaction materials have **no ME** in EVE (ME only applies
+ * to manufacturing), so `required = base_quantity × runs`.
+ */
+export type ReactionInputLine = {
+  typeId: number;
+  name: string;
+  requiredQuantity: number;
+  /**
+   * Unit price used (material basis), for the UI's per-line cost.
+   */
+  unitPrice: number | null;
+  lineCost: number;
+};
+/**
+ * A single reaction start in the plan: which formula, how many runs, and its
+ * full reagent requirement.
+ */
+export type ReactionLine = {
+  blueprintTypeId: number;
+  productTypeId: number;
+  productName: string;
+  productPerRun: number;
+  runs: number;
+  inputs: ReactionInputLine[];
+};
+/**
+ * Full reaction plan extracted from a build tree — every Reaction sub-step
+ * (composite / molecular / polymer / biochemical formulas), how many times it
+ * must run, and its reagents. `total_install_cost` is the summed job fee
+ * already captured in [`ProfitBreakdown::reaction_install_cost`].
+ */
+export type ReactionPlan = { lines: ReactionLine[]; totalInstallCost: number };
 /**
  * A known manufacturing rig type with its bonus description.
  * A rig type surfaced to the Facilities rig selector.
