@@ -24,7 +24,7 @@ const STRUCTURE_ID_MIN: i64 = 1_000_000_000_000;
 /// GET /universe/structures/{id}/. Optional — when absent the assets view
 /// falls back to "Structure {id}". Must be enabled on the EVE developer
 /// application registration and the character must have re-logged in.
-const STRUCTURES_SCOPE: &str = "esi-universe_structures.read_structures.v1";
+const STRUCTURES_SCOPE: &str = "esi-universe.read_structures.v1";
 
 /// Valuation basis for one type: the location-local weighted average when the
 /// bulk path supplied one, else ESI's global average, else the Jita sell price
@@ -431,7 +431,7 @@ pub async fn assets_load(
     // the character) or a not-logged-in character leaves the entry absent and
     // the caller falls through to the generic fallback label.
     // Skip entirely when the character's token lacks the
-    // esi-universe_structures scope — no point hitting ESI just to get 403s.
+    // esi-universe.read_structures scope — no point hitting ESI just to get 403s.
     let structure_ids: Vec<i64> = root_ids
         .iter()
         .copied()
