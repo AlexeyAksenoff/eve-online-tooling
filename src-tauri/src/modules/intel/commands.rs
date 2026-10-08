@@ -295,9 +295,24 @@ pub struct FwMap {
 
 /// On-disk key for the rolling VP-history store (#899).
 const VP_HISTORY_KEY: &str = "fw_vp_history";
-/// Samples kept per system: ~30 min of history at the existing 5-min fetch
-/// cadence.
+/// Samples kept per system — a generous cap on history size, not a claim
+/// about cadence (see [`VP_WINDOW_MAX_SECS`]): `fwSystems` has no fixed
+/// refetch interval by default (only page visit/focus, or an opt-in 60s
+/// auto-refresh), so real-world samples can land anywhere from seconds to
+/// hours apart.
 const VP_HISTORY_MAX_SAMPLES: usize = 6;
+/// How far back a sample may be and still count toward the "last ~30 min"
+/// window used for both the Trend arrow (`per_hour`) and the Δ30m column
+/// (`delta`). Without this bound, a user who hasn't had the page open for a
+/// few hours gets `per_hour` computed across that *entire* gap: a real
+/// swing still shows up correctly in `delta` (the raw, un-annualized
+/// change), but gets diluted below the "stable" threshold once divided by
+/// the inflated elapsed time — the Trend arrow reading "stable" right next
+/// to a Δ30m that very much isn't (#950). Past this cutoff there's no
+/// genuinely recent sample to compare against, so both read `None` instead
+/// of quietly averaging across however long the gap happened to be. Set a
+/// little above the nominal 30 min to tolerate normal visit-cadence jitter.
+const VP_WINDOW_MAX_SECS: i64 = 40 * 60;
 
 /// One point-in-time VP sample, kept just long enough to compute velocity.
 #[derive(Serialize, Deserialize, Clone, Copy)]
@@ -310,13 +325,14 @@ struct VpSample {
     occupier_id: i64,
 }
 
-/// Both forms of a system's VP movement across its retained on-disk history
-/// window (#899, extended for the raw delta): `per_hour` is the existing
-/// annualized rate (what the Trend arrows/ETA use), `delta` is the raw,
-/// un-annualized change actually observed across the window — what "in the
-/// last ~30 min" literally means, since the window is whatever's been
-/// retained at the app's actual fetch cadence, not always exactly 30
-/// minutes.
+/// Both forms of a system's VP movement across the last [`VP_WINDOW_MAX_SECS`]
+/// of retained history (#899, extended for the raw delta; windowed per #950):
+/// `per_hour` is the existing annualized rate (what the Trend arrows/ETA
+/// use), `delta` is the raw, un-annualized change actually observed within
+/// that window — what "in the last ~30 min" literally means. Both are
+/// derived from the *same* oldest/newest pair, so they can never visually
+/// contradict each other (a real Δ30m swing always shows up as a
+/// proportional Trend arrow, and vice versa).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct VpWindowChange {
     per_hour: f64,
@@ -325,8 +341,10 @@ struct VpWindowChange {
 
 /// Push a fresh sample for every current FW system into `history`, prune
 /// samples beyond [`VP_HISTORY_MAX_SAMPLES`], and return each system's
-/// ΔVP%/hour computed across its oldest→newest retained sample. `None` for a
-/// system with fewer than two samples (freshly seen, or just flipped).
+/// ΔVP%/hour computed across its oldest-within-[`VP_WINDOW_MAX_SECS`]→newest
+/// sample. `None` for a system with no second sample inside that window —
+/// freshly seen, just flipped, or no genuinely recent history (the page
+/// hasn't been visited in a while).
 ///
 /// An ownership flip clears that system's history before pushing the new
 /// sample: VP resets to (near) zero for the new occupier, so a velocity
@@ -361,17 +379,26 @@ fn update_vp_history(
         while history_for_system.len() > max_samples {
             history_for_system.pop_front();
         }
-        if let (Some(first), Some(last)) = (history_for_system.front(), history_for_system.back()) {
-            let dt_hours = (last.ts - first.ts) as f64 / 3600.0;
-            if dt_hours > 0.0 {
-                let delta = last.vp_pct - first.vp_pct;
-                velocity.insert(
-                    system_id,
-                    VpWindowChange {
-                        per_hour: delta / dt_hours,
-                        delta,
-                    },
-                );
+        if let Some(last) = history_for_system.back() {
+            // Oldest sample still within the recency window — not
+            // necessarily `front()`, which can be arbitrarily old after a
+            // real-world gap in polling. Forward iteration (oldest→newest)
+            // means the first match is the oldest one that qualifies.
+            let first = history_for_system
+                .iter()
+                .find(|s| last.ts - s.ts <= VP_WINDOW_MAX_SECS);
+            if let Some(first) = first {
+                let dt_hours = (last.ts - first.ts) as f64 / 3600.0;
+                if dt_hours > 0.0 {
+                    let delta = last.vp_pct - first.vp_pct;
+                    velocity.insert(
+                        system_id,
+                        VpWindowChange {
+                            per_hour: delta / dt_hours,
+                            delta,
+                        },
+                    );
+                }
             }
         }
     }
@@ -987,9 +1014,25 @@ mod tests {
     fn falling_vp_yields_negative_velocity() {
         let mut history = empty_history();
         update_vp_history(&mut history, &[(1, 500003, 0.50)], 0, 6);
-        let out = update_vp_history(&mut history, &[(1, 500003, 0.40)], 3_600, 6);
-        assert!((out[&1].per_hour - (-0.10)).abs() < 1e-9);
+        // -0.10 VP over 1800s (0.5h) → -0.20/hour.
+        let out = update_vp_history(&mut history, &[(1, 500003, 0.40)], 1_800, 6);
+        assert!((out[&1].per_hour - (-0.20)).abs() < 1e-9);
         assert!((out[&1].delta - (-0.10)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_gap_past_the_recency_window_reports_no_velocity_instead_of_diluting_it() {
+        // #950: the retained "oldest" sample can be arbitrarily old after a
+        // real-world gap (fwSystems has no fixed refetch interval by
+        // default — only page visit/focus). A naive oldest→newest delta
+        // would silently dilute a genuine swing into "stable" once divided
+        // by the inflated elapsed time; instead, past VP_WINDOW_MAX_SECS
+        // there's no qualifying second sample, so this reports `None`
+        // rather than a misleading number.
+        let mut history = empty_history();
+        update_vp_history(&mut history, &[(1, 500003, 0.30)], 0, 6);
+        let out = update_vp_history(&mut history, &[(1, 500003, 0.431)], 7 * 3600, 6);
+        assert_eq!(out.get(&1), None);
     }
 
     #[test]

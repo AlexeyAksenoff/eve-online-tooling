@@ -319,7 +319,7 @@ const FW_COLUMNS: SortColumn<FwSortKey>[] = [
     label: "Trend",
     numeric: false,
     description:
-      "Capture-progress velocity over the last ~30 min: ↑↑ fast gain, ↑ gain, → stable, ↓ falling. Blank until enough history exists.",
+      "VP velocity over the last ~30 min — ↑↑ fast gain, ↑ gain, → stable, ↓ falling, signed for your militia once one's selected (↑ = good for you) and for the occupier in Observer mode. Blank until enough recent history exists.",
   },
   {
     key: "kills",
@@ -1351,6 +1351,15 @@ function SystemTable({
        *  `FwSystemNode` itself. `null` outside perspective mode. */
       vpDelta30mSigned: number | null;
       vpDeltaLoginSigned: number | null;
+      /** Faction-signed velocity, for the Trend arrow only (#950) — so an
+       *  enemy-occupied system losing VP (good for you) shows ↑, not the
+       *  raw-occupier ↓, matching the sign the Δ30m/Δ login columns already
+       *  use right next to it. The tooltip's rate/ETA text stays on the raw
+       *  `vpVelocity`: "hours to flip" is inherently about the occupier's
+       *  own climb to 100%, not a perspective-relative quantity. `null`
+       *  outside perspective mode, where there's no "mine vs theirs" to
+       *  flip against. */
+      vpVelocitySigned: number | null;
       hotspot: HotspotSystemCounts;
       hotspotActivity: number;
     };
@@ -1380,6 +1389,13 @@ function SystemTable({
         vpDeltaLoginSigned: perspective
           ? factionSignedDelta(
               loginDelta(loginBaseline, s.systemId, s.vpPct),
+              s.occupierId,
+              perspective.myFaction,
+            )
+          : null,
+        vpVelocitySigned: perspective
+          ? factionSignedDelta(
+              s.vpVelocity,
               s.occupierId,
               perspective.myFaction,
             )
@@ -1491,7 +1507,9 @@ function SystemTable({
                 title={trendTooltip(s.vpPct, s.vpVelocity)}
               >
                 {(() => {
-                  const tier = trendTier(s.vpVelocity);
+                  const tier = trendTier(
+                    perspective ? s.vpVelocitySigned : s.vpVelocity,
+                  );
                   return tier ? TREND_ARROW[tier] : "—";
                 })()}
               </td>
