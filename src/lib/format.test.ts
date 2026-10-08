@@ -51,6 +51,7 @@ function row(
     materials: [],
     missingPrices: [],
     reactions: { lines: [], totalInstallCost: 0 },
+    excessRevenue: 0,
   };
 }
 

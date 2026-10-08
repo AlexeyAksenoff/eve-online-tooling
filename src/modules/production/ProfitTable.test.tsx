@@ -50,6 +50,7 @@ const T2_ROW: ProfitBreakdown = {
   materials: [],
   missingPrices: [],
   reactions: { lines: [], totalInstallCost: 0 },
+  excessRevenue: 0,
 };
 
 describe("ProfitTable", () => {

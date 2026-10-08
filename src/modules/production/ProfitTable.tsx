@@ -77,6 +77,8 @@ function costMarkdown(row: ProfitBreakdown): string {
     out.push(`| Blueprint | ${formatIsk(row.blueprintCost)} |`);
   if (row.inventionCost > 0)
     out.push(`| Invention | ${formatIsk(row.inventionCost)} |`);
+  if (row.excessRevenue > 0)
+    out.push(`| Excess (resale) | ${formatIsk(row.excessRevenue)} |`);
   out.push(
     `| Cost/unit | ${formatIsk(unitCost(row))} |`,
     `| **Profit** | **${formatIsk(row.profit)}** |`,
@@ -633,6 +635,14 @@ function BreakdownRow({ row }: { row: ProfitBreakdown }) {
               <span>Reaction install</span>
               <span className="tabular-nums text-zinc-300">
                 {formatIsk(row.reactionInstallCost)}
+              </span>
+            </div>
+          )}
+          {row.excessRevenue > 0 && (
+            <div className="flex justify-between text-zinc-400">
+              <span>Excess revenue (resale)</span>
+              <span className="tabular-nums text-emerald-400">
+                +{formatIsk(row.excessRevenue)}
               </span>
             </div>
           )}

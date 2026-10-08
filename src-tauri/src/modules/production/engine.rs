@@ -1148,7 +1148,6 @@ pub struct ProfitBreakdown {
     /// `excess_quantity × product-basis price`, with sales tax/broker fee
     /// applied when `include_sales_cost`. Added to net profit. 0 when
     /// nothing is built or nothing is over-produced.
-    #[serde(default)]
     pub excess_revenue: f64,
     /// Meta group of the product (Tech I/II, Faction, Officer, …). Filled by the
     /// command layer from the SDE; the pure engine leaves it `None`.

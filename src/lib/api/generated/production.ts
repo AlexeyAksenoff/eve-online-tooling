@@ -473,7 +473,7 @@ export type ProfitBreakdown = {
    * applied when `include_sales_cost`. Added to net profit. 0 when
    * nothing is built or nothing is over-produced.
    */
-  excessRevenue?: number;
+  excessRevenue: number;
   /**
    * Meta group of the product (Tech I/II, Faction, Officer, …). Filled by the
    * command layer from the SDE; the pure engine leaves it `None`.
