@@ -119,7 +119,11 @@ export function MultiCombo({
         </span>
       )}
 
-      {text && !isError && filtered.length > 0 && (
+      {/* Dropdown: show all available rigs when idle, filtered rigs while
+          typing. Always rendered (when not loading/errored and there are
+          options) so users actually SEE what they can pick — previously the
+          list only appeared after typing, which made rigs look "unselectable". */}
+      {!isError && filtered.length > 0 && (
         <div className="max-h-52 overflow-auto rounded border border-zinc-700 bg-zinc-900 text-sm">
           {filtered.slice(0, 12).map((r) => (
             <button

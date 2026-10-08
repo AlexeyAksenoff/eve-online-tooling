@@ -610,28 +610,24 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
           `null` = wormhole (no live index). The field auto-fills from ESI
           `/industry/systems/` like the rest of the app. Each facility type
           keeps its OWN system cost index, so a reaction facility can sit in a
-          different system from the manufacturing one. */}
-      <Field
-        label="Cost index (fraction, from system)"
-        title="System cost index (0–1) from ESI /industry/systems/ for the chosen build system. Each facility (manufacturing / reaction / components) keeps its own index — pick a different system per facility if your structures live in different systems."
-      >
-        <CostIndexField
-          value={profile.systemCostIndex}
-          onChange={(ci) =>
-            setFacilityProfiles({
-              ...facilityProfiles,
-              [selectedProfile]: { ...profile, systemCostIndex: ci },
-            })
-          }
-          systemId={profile.systemId}
-          onSystemChange={(id) =>
-            setFacilityProfiles({
-              ...facilityProfiles,
-              [selectedProfile]: { ...profile, systemId: id },
-            })
-          }
-        />
-      </Field>
+          different system from the manufacturing one. The label + tooltip come
+          from CostIndexField itself, so we don't wrap it in another <Field>. */}
+      <CostIndexField
+        value={profile.systemCostIndex}
+        onChange={(ci) =>
+          setFacilityProfiles({
+            ...facilityProfiles,
+            [selectedProfile]: { ...profile, systemCostIndex: ci },
+          })
+        }
+        systemId={profile.systemId}
+        onSystemChange={(id) =>
+          setFacilityProfiles({
+            ...facilityProfiles,
+            [selectedProfile]: { ...profile, systemId: id },
+          })
+        }
+      />
 
       {/* Implant/module bonuses */}
       <Field

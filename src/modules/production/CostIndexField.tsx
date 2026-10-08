@@ -30,15 +30,21 @@ export function CostIndexField({
 }) {
   const [picked, setPicked] = useState<SystemMatch | null>(null);
 
-  // Initialize picked from systemId (once, when systemId is set but picked isn't).
+  // Sync `picked` to the latest systemId — full reset on change, so that
+  // switching facility tabs (each with its OWN systemId) loads the correct
+  // system instead of keeping the stale one from the previous tab.
   useEffect(() => {
-    if (systemId != null && picked == null) {
-      // We can't resolve the name here without a reverse lookup; just set
-      // picked to a stub so the query fires. The actual name comes from
-      // the Combo's search results.
+    if (systemId != null) {
       setPicked({ id: systemId, name: "" });
+    } else {
+      // Wormhole / manual override — no pinned system, keep whatever the
+      // user typed as `value`.
+      setPicked(null);
     }
-  }, [systemId, picked]);
+        // We intentionally watch ONLY systemId: each tab owns its systemId, so a
+    // change always means "load this system". React strict-mode double‑invoke
+    // is harmless here (setPicked to the same id is a no‑op).
+  }, [systemId]);
 
   // Sync changes back to the caller so systemId survives profile switches.
   useEffect(() => {
