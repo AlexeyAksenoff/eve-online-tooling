@@ -1,3 +1,4 @@
+import type { Dispatch, SetStateAction } from "react";
 import type { UseMutationResult, UseQueryResult } from "@tanstack/react-query";
 import type {
   Decryptor,
@@ -51,6 +52,12 @@ export interface WorkbenchState {
   setBuildComponents: (b: boolean) => void;
   te: number;
   setTe: (n: number) => void;
+  /** Fallback ME (0..10) for component build steps (is_component) when not owned. */
+  componentMe: number;
+  setComponentMe: (n: number) => void;
+  /** Fallback TE (0..20) for component build steps (is_component) when not owned. */
+  componentTe: number;
+  setComponentTe: (n: number) => void;
   timeSkill: number;
   setTimeSkill: (n: number) => void;
   includeSaleCost: boolean;
@@ -77,11 +84,13 @@ export interface WorkbenchState {
   // Facility profiles: two slots (Manufacturing + Reaction) with separate
   // structure/security/rig bonuses. Threaded through ProfitParams to the
   // Rust engine so each build step is costed against the right facility.
+  // Functional updates (Dispatch<SetStateAction>) so `FacilityProfilePanel.update`
+  // can patch one profile without clobbering concurrent edits to another tab.
   facilityProfiles: FacilityProfiles;
-  setFacilityProfiles: (p: FacilityProfiles) => void;
+  setFacilityProfiles: Dispatch<SetStateAction<FacilityProfiles>>;
   /** Which profile slot is currently being edited in the UI. */
-  selectedProfile: "manufacturing" | "reaction" | "components";
-  setSelectedProfile: (s: "manufacturing" | "reaction" | "components") => void;
+  selectedProfile: "manufacturing" | "components" | "reaction";
+  setSelectedProfile: (s: "manufacturing" | "components" | "reaction") => void;
 
   name: string;
   setName: (s: string) => void;

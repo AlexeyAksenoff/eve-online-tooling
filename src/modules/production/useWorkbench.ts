@@ -49,6 +49,10 @@ export function useWorkbench(): WorkbenchState {
   const [useStock, setUseStock] = useState(false);
   const [buildComponents, setBuildComponents] = useState(false);
   const [te, setTe] = useState(0);
+  // Fallback ME/TE applied to ALL component build steps (is_component) when the
+  // component's blueprint is not owned — one pair for all components.
+  const [componentMe, setComponentMe] = useState(0);
+  const [componentTe, setComponentTe] = useState(0);
   const [timeSkill, setTimeSkill] = useState(5);
 
   // Facility profiles (Manufacturing + Reaction). Loaded from localStorage,
@@ -154,6 +158,8 @@ export function useWorkbench(): WorkbenchState {
     useStock,
     buildComponents,
     te,
+    componentMe,
+    componentTe,
     timeSkill,
     includeSaleCost,
     sellBrokerPct,
@@ -200,6 +206,8 @@ export function useWorkbench(): WorkbenchState {
         facilityProfiles,
         ignoreSideProducts: true,
         implant,
+        componentMe,
+        componentTe,
       }),
     );
   }
@@ -390,6 +398,10 @@ export function useWorkbench(): WorkbenchState {
     setBuildComponents,
     te,
     setTe,
+    componentMe,
+    setComponentMe,
+    componentTe,
+    setComponentTe,
     timeSkill,
     setTimeSkill,
     includeSaleCost,

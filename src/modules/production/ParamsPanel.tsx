@@ -75,6 +75,10 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
     setUseOwnedMe,
     te,
     setTe,
+    componentMe,
+    setComponentMe,
+    componentTe,
+    setComponentTe,
     timeSkill,
     setTimeSkill,
     facilityProfiles,
@@ -327,6 +331,33 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
               max={5}
             />
 
+            {/* Build sub-components: shared ME/TE applied to ALL component build
+              steps (is_component) whose blueprint isn't owned. Separate from the
+                        global ME/TE above (which stays on end-products). */}
+            {buildComponents && (
+              <fieldset className="mt-3 space-y-2 rounded border border-zinc-800 p-2.5">
+                <legend className="px-1 text-[11px] font-medium text-zinc-400">
+                  Components ME / TE
+                </legend>
+                <Num
+                  label="ME (components)"
+                  value={componentMe}
+                  onChange={setComponentMe}
+                  min={0}
+                  max={10}
+                  placeholder="fallback for un-owned component BPs"
+                />
+                <Num
+                  label="TE (components)"
+                  value={componentTe}
+                  onChange={setComponentTe}
+                  min={0}
+                  max={20}
+                  placeholder="fallback for un-owned component BPs"
+                />
+              </fieldset>
+            )}
+
             {/* Facility profile preview (configured in the Facilities tab) */}
             <Field label="Manufacturing facility">
               <div className="text-sm text-zinc-300">
@@ -462,20 +493,42 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
   // Apply a patch to the active profile, then recompose its rig bonuses from
   // the structure + security + selected rig type IDs. Running this on *every*
   // change (structure / security / rigs) is what fixes the stale-bonus bug
-  // where switching structure or security left the old rig+structure bonus
-  // in place — applyRigBonuses is only invoked here, not at each call site.
+  // where switching structure or security left the old rig+structure bonus in
+  // place — applyRigBonuses is only invoked here, not at each call site.
   //
-  // NOTE: `setFacilityProfiles` is a plain (non-functional) setter, so we read
-  // the latest `facilityProfiles` from this closure. To avoid stale closures
-  // on rapid edits (e.g. click two rigs before React re-renders), apply the
-  // structural patch immediately and recompute rig bonuses async; the
-  // async result re-applies on top of whatever the latest committed state is.
+  // CRITICAL: both writes use FUNCTIONAL updates (prev => …) so we never read
+  // a stale `facilityProfiles` closure. The previous version captured
+  // `facilityProfiles` from the render in which `update` was created, then
+  // wrote it back from a `.then()` — by the time the promise resolved, another
+  // tab's edits had landed in state, and the awaiter silently OVERWROTE them.
+  // That was the root cause of (a) the build-system index "drifting" between
+  // tabs and (b) rig selections / tax edits "not saving". Functional updates
+  // always fold into the *latest* committed state.
   const update = (patches: Partial<FacilityProfile>) => {
-    const current = { ...facilityProfiles[selectedProfile], ...patches };
-    setFacilityProfiles({ ...facilityProfiles, [selectedProfile]: current });
-    // Recompute rig bonuses (async) and overlay the result.
-    void applyRigBonuses(current, current.rigTypeIds ?? []).then((composed) => {
-      setFacilityProfiles({ ...facilityProfiles, [selectedProfile]: composed });
+    // 1) Optimistically persist the structural patch (structure / security /
+    //    rigs / tax) so the UI reflects the edit instantly, without waiting
+    //    for the async rig-bonus RPC.
+    setFacilityProfiles((prev) => ({
+      ...prev,
+      [selectedProfile]: { ...prev[selectedProfile], ...patches },
+    }));
+    // 2) Recompose rig bonuses (async) and OVERLAY only the bonus fields —
+    //    never clobber a newer edit another tab may have written in the gap.
+    void applyRigBonuses(
+      { ...facilityProfiles[selectedProfile], ...patches },
+      patches.rigTypeIds ?? facilityProfiles[selectedProfile].rigTypeIds ?? [],
+    ).then((composed) => {
+      setFacilityProfiles((prev) => ({
+        ...prev,
+        [selectedProfile]: {
+          ...prev[selectedProfile],
+          // keep any edits written since step 1, only overwrite bonuses:
+          meBonus: composed.meBonus,
+          teBonusPct: composed.teBonusPct,
+          costBonus: composed.costBonus,
+          rigTypeIds: composed.rigTypeIds,
+        },
+      }));
     });
   };
 

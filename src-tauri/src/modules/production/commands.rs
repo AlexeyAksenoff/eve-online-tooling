@@ -197,6 +197,16 @@ pub struct ProfitParams {
     /// Optional character implant/facility module bonuses (time, ME, cost).
     /// When `Some`, applied on top of the facility profile's bonuses.
     pub implant: Option<super::engine::ImplantBonus>,
+    /// Fallback ME (0..=10) applied to **component** build steps
+    /// (`BuildStep.is_component == true`) when the component's blueprint is not
+    /// in `owned_me` — lets the user set ONE ME for all components. Ignored for
+    /// the top-level product (which uses `me`). 0 = no bonus.
+    #[serde(default)]
+    pub component_me: i64,
+    /// Fallback TE (0..=20) for component build steps when not owned — one value
+    /// for all components. Ignored for the top-level product. 0 = no bonus.
+    #[serde(default)]
+    pub component_te: i64,
 }
 
 fn default_build_components() -> bool {
@@ -383,6 +393,7 @@ pub async fn production_profit(
         implant: params.implant.clone(),
         owned_me: params.owned_me.clone(),
         owned_te: params.owned_te.clone(),
+        component_me: params.component_me,
     };
 
     let meta = crate::sde::cached_meta_group_names(&dir)?;
@@ -456,14 +467,23 @@ pub async fn production_profit(
     let mut out: Vec<ProfitBreakdown> = steps
         .iter()
         .map(|step| {
-            // Owned blueprints use their researched ME; everything else the
-            // global ME slider. (T2/T3 rows override with the invented BPC's ME
-            // inside evaluate regardless.)
-            let step_me = params
-                .owned_me
-                .get(&step.blueprint_type_id)
-                .copied()
-                .unwrap_or(params.me);
+            // Owned blueprints use their researched ME; everything else the global
+            // ME slider. But for COMPONENT build steps (is_component), fall back
+            // to the shared `component_me` (one ME for all components) instead —
+            // T2/T3 rows still override with the invented BPC's ME in evaluate.
+            let step_me = if step.is_component {
+                params
+                    .owned_me
+                    .get(&step.blueprint_type_id)
+                    .copied()
+                    .unwrap_or(params.component_me)
+            } else {
+                params
+                    .owned_me
+                    .get(&step.blueprint_type_id)
+                    .copied()
+                    .unwrap_or(params.me)
+            };
             let mut bd = evaluate_with_stock(
                 step,
                 params.runs,
@@ -473,11 +493,20 @@ pub async fn production_profit(
                 &params.stock,
             );
             // Manufacturing job time = base × runs × (1 − TE/100) × skill × facility_TE.
-            let te = params
-                .owned_te
-                .get(&step.blueprint_type_id)
-                .copied()
-                .unwrap_or(params.te);
+            // Components use the shared `component_te` fallback — one TE for all.
+            let te = if step.is_component {
+                params
+                    .owned_te
+                    .get(&step.blueprint_type_id)
+                    .copied()
+                    .unwrap_or(params.component_te)
+            } else {
+                params
+                    .owned_te
+                    .get(&step.blueprint_type_id)
+                    .copied()
+                    .unwrap_or(params.te)
+            };
             if let Some(&base) = base_times.get(&step.blueprint_type_id) {
                 let time = base as f64
                     * params.runs as f64

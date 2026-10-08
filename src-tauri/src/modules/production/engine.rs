@@ -637,8 +637,15 @@ pub struct ProfitConfig {
     /// Owned blueprint ME per type id (for per-blueprint ME override). Used
     /// for sub-component ME when `build_components` is true.
     pub owned_me: HashMap<i64, i64>,
-    /// Owned blueprint TE per type id (reserved for future TE sub-component
-    /// resolution; ME is used in build_unit_cost, TE applied via step time).
+    /// Fallback ME (0..=10) used for sub-component steps (`BuildStep.is_component`)
+    /// when the component's blueprint is NOT in `owned_me` — lets the user set a
+    /// single ME for all components instead of per-blueprint. Ignored for the
+    /// top-level product (which uses the global blueprint ME). 0 = no bonus.
+    pub component_me: i64,
+    /// Owned blueprint TE per type id (for per-blueprint TE override of
+    /// sub-component steps). TE fallback (`component_te`) lives on
+    /// `ProfitParams` in commands.rs, not here — `ProfitConfig` has no
+    /// build-unit-cost TE path (component time is computed per top-level step).
     #[allow(dead_code)]
     pub owned_te: HashMap<i64, i64>,
 }
@@ -691,6 +698,7 @@ impl Default for ProfitConfig {
             implant: None,
             owned_me: HashMap::new(),
             owned_te: HashMap::new(),
+            component_me: 0,
         }
     }
 }
@@ -900,11 +908,20 @@ fn build_unit_cost(
     if depth == 0 || step.product_per_run <= 0 {
         return None;
     }
-    let component_me = config
-        .owned_me
-        .get(&step.product_type_id)
-        .copied()
-        .unwrap_or(0);
+    // ME for this build step. For a sub-component (is_component), prefer the
+    // owned blueprint's ME; if not owned, fall back to the shared
+    // `component_me` (one value for all components, set in the UI). For the
+    // top-level product, ME comes from the owned blueprint or stays 0 (the
+    // global blueprint ME is applied elsewhere in the caller).
+    let component_me = if step.is_component {
+        config
+            .owned_me
+            .get(&step.product_type_id)
+            .copied()
+            .unwrap_or(config.component_me)
+    } else {
+        0
+    };
     let me_bonus = config.me_bonus_for_step(step);
     let mut materials_total = 0.0;
     let mut eiv = 0.0;

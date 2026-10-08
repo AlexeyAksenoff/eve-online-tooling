@@ -78,6 +78,10 @@ export interface ComposeProfitParamsInput {
   ownedMe: Record<number, number>;
   te: number;
   ownedTe: Record<number, number>;
+  /** Fallback ME (0..10) for component build steps whose blueprint isn't owned. */
+  componentMe: number;
+  /** Fallback TE (0..20) for component build steps whose blueprint isn't owned. */
+  componentTe: number;
   timeSkill: number;
   useStock: boolean;
   stock: Record<number, number> | undefined;
@@ -117,6 +121,8 @@ export function composeProfitParams(
     ownedMe: input.ownedMe,
     te: input.te,
     ownedTe: input.ownedTe,
+    componentMe: input.componentMe,
+    componentTe: input.componentTe,
     timeSkill: input.timeSkill,
     stock: resolveStock(input.useStock, input.stock),
     buildComponents: input.buildComponents,
