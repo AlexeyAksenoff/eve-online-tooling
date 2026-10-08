@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   productionSystemCostIndex,
@@ -32,8 +32,14 @@ export function CostIndexField({
 
   // Sync `picked` to the latest systemId — full reset on change, so that
   // switching facility tabs (each with its OWN systemId) loads the correct
-  // system instead of keeping the stale one from the previous tab.
+  // system instead of keeping the stale one from the previous tab. Only
+  // re-run when systemId actually changes, so we don't clobber a still-valid
+  // `picked` on unrelated renders (which previously created a reset loop via
+  // the reverse sync-effect below).
+  const prevSystemIdRef = useRef(systemId);
   useEffect(() => {
+    if (systemId === prevSystemIdRef.current) return; // no change → don't reset
+    prevSystemIdRef.current = systemId;
     if (systemId != null) {
       setPicked({ id: systemId, name: "" });
     } else {
@@ -41,9 +47,6 @@ export function CostIndexField({
       // user typed as `value`.
       setPicked(null);
     }
-        // We intentionally watch ONLY systemId: each tab owns its systemId, so a
-    // change always means "load this system". React strict-mode double‑invoke
-    // is harmless here (setPicked to the same id is a no‑op).
   }, [systemId]);
 
   // Sync changes back to the caller so systemId survives profile switches.

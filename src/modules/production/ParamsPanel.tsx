@@ -464,12 +464,18 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
   // change (structure / security / rigs) is what fixes the stale-bonus bug
   // where switching structure or security left the old rig+structure bonus
   // in place — applyRigBonuses is only invoked here, not at each call site.
-  const update = async (patches: Partial<FacilityProfile>) => {
-    const next = { ...profile, ...patches } as FacilityProfile;
-    const composed = await applyRigBonuses(next, next.rigTypeIds ?? []);
-    setFacilityProfiles({
-      ...facilityProfiles,
-      [selectedProfile]: composed,
+  //
+  // NOTE: `setFacilityProfiles` is a plain (non-functional) setter, so we read
+  // the latest `facilityProfiles` from this closure. To avoid stale closures
+  // on rapid edits (e.g. click two rigs before React re-renders), apply the
+  // structural patch immediately and recompute rig bonuses async; the
+  // async result re-applies on top of whatever the latest committed state is.
+  const update = (patches: Partial<FacilityProfile>) => {
+    const current = { ...facilityProfiles[selectedProfile], ...patches };
+    setFacilityProfiles({ ...facilityProfiles, [selectedProfile]: current });
+    // Recompute rig bonuses (async) and overlay the result.
+    void applyRigBonuses(current, current.rigTypeIds ?? []).then((composed) => {
+      setFacilityProfiles({ ...facilityProfiles, [selectedProfile]: composed });
     });
   };
 

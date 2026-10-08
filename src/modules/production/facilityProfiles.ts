@@ -105,12 +105,14 @@ export function defaultComponentsProfile(): FacilityProfile {
   );
 }
 
-/** Default facility profiles triple. */
+/** Default facility profiles triple. Field order MUST match Rust
+ * `FacilityProfiles` (manufacturing → components → reaction) and the TS
+ * interface — a mismatch swaps component/reaction on every persistence round. */
 export function defaultFacilityProfiles(): FacilityProfiles {
   return {
     manufacturing: defaultManufacturingProfile(),
-    reaction: defaultReactionProfile(),
     components: defaultComponentsProfile(),
+    reaction: defaultReactionProfile(),
   };
 }
 
@@ -146,18 +148,21 @@ export function loadFacilityProfiles(): FacilityProfiles {
     const raw = localStorage.getItem(STORAGE_KEYS.facilityProfiles);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<FacilityProfiles>;
+      // Order MUST match types.ts + Rust FacilityProfiles (manufacturing →
+      // components → reaction); otherwise the components and reaction halves
+      // get swapped on every localStorage round-trip.
       return {
         manufacturing: {
           ...defaultManufacturingProfile(),
           ...parsed.manufacturing,
         },
-        reaction: {
-          ...defaultReactionProfile(),
-          ...parsed.reaction,
-        },
         components: {
           ...defaultComponentsProfile(),
           ...parsed.components,
+        },
+        reaction: {
+          ...defaultReactionProfile(),
+          ...parsed.reaction,
         },
       };
     }

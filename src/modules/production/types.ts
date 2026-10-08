@@ -152,12 +152,14 @@ export interface FacilityProfile {
   rigTypeIds: number[];
 }
 
-/** A triple of facility profiles: manufacturing, reaction, + components.
- *  Matches Rust `FacilityProfiles`. */
+/** A triple of facility profiles: manufacturing, components, + reaction.
+ *  Matches Rust `FacilityProfiles` field order (manufacturing → components →
+ *  reaction); the ordering must match Rust exactly, otherwise JSON round-trip
+ *  through localStorage swaps the `components` and `reaction` halves. */
 export interface FacilityProfiles {
   manufacturing: FacilityProfile;
-  reaction: FacilityProfile;
   components: FacilityProfile;
+  reaction: FacilityProfile;
 }
 
 /** Storage key for saved facility profiles. */
