@@ -20,4 +20,10 @@ pub(crate) use commands::BASE_T2_ME;
 /// exposes), without poking into `engine` from outside the module.
 /// `required_quantity` is also the ME-rounding formula the Mass Production
 /// module (#883) sums per owned blueprint copy.
-pub(crate) use engine::{evaluate, manufacturing_step, required_quantity, ProfitConfig};
+/// cross-module surface (FacilityProfiles etc.) is re-exported for the command
+/// layer and future consumers (e.g. side-product handling).
+#[allow(unused_imports)]
+pub(crate) use engine::{
+    evaluate, manufacturing_step, required_quantity, Activity, FacilityProfile, FacilityProfiles,
+    FacilityType, ProfitConfig, SecurityTier, StructureType,
+};

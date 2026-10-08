@@ -4,12 +4,12 @@ import type { ImportedBlueprint } from "./types";
 import {
   bestResearchedMap,
   composeProfitParams,
-  composeStructureBonuses,
   countDirtySettings,
   inventionCostPerUnit,
   resolveStock,
   type ComposeProfitParamsInput,
 } from "./profitParams";
+import { defaultFacilityProfiles } from "./facilityProfiles";
 
 function ownedBp(typeId: number, me: number, te: number): OwnedBlueprint {
   return {
@@ -42,15 +42,9 @@ function baseInput(
     te: 0,
     ownedTe: {},
     timeSkill: 5,
-    structure: "npc",
-    rigMePct: 0,
-    rigTePct: 0,
-    rigCostPct: 0,
     useStock: false,
     stock: undefined,
     buildComponents: false,
-    costIndexPct: 5,
-    facilityTaxPct: 0,
     includeSaleCost: false,
     sellTaxPct: 4.5,
     sellBrokerPct: 3,
@@ -60,6 +54,8 @@ function baseInput(
     inventionSkill: 5,
     decryptorTypeId: null,
     productBestHub: false,
+    facilityProfiles: defaultFacilityProfiles(),
+    ignoreSideProducts: true,
     ...overrides,
   };
 }
@@ -93,39 +89,6 @@ describe("bestResearchedMap", () => {
       "me",
     );
     expect(map[2]).toBe(8);
-  });
-});
-
-describe("composeStructureBonuses", () => {
-  it("keeps meBonus at exactly 1 for an unbonused NPC station with no rig", () => {
-    const { meBonus, costBonus, structureTePct } = composeStructureBonuses(
-      "npc",
-      0,
-      0,
-      0,
-    );
-    expect(meBonus).toBe(1);
-    expect(costBonus).toBe(0);
-    expect(structureTePct).toBe(0);
-  });
-
-  it("multiplies the structure ME bonus by the rig bonus, not just adds it", () => {
-    // Raitaru meBonus 0.99, with a 2% rig ME bonus on top.
-    const { meBonus } = composeStructureBonuses("raitaru", 2, 0, 0);
-    expect(meBonus).toBeCloseTo(0.99 * (1 - 2 / 100), 10);
-  });
-
-  it("adds rig time bonus onto the structure's TE percent", () => {
-    const { structureTePct } = composeStructureBonuses("azbel", 0, 5, 0);
-    expect(structureTePct).toBe(20 + 5);
-  });
-
-  it("composes cost bonuses multiplicatively (stacking discounts, not adding)", () => {
-    // Sotiyo costBonus 0.05, plus a 10% rig cost bonus.
-    const { costBonus } = composeStructureBonuses("sotiyo", 0, 0, 10);
-    expect(costBonus).toBeCloseTo(1 - (1 - 0.05) * (1 - 0.1), 10);
-    // Explicitly not the naive (wrong) sum.
-    expect(costBonus).not.toBeCloseTo(0.05 + 0.1, 10);
   });
 });
 
@@ -222,33 +185,30 @@ describe("composeProfitParams", () => {
     expect(withoutStock.stock).toEqual({});
   });
 
-  it("converts percentage inputs to fractions", () => {
+  it("converts percentage inputs (sales tax, broker fee) to fractions", () => {
     const params = composeProfitParams(
       baseInput({
-        costIndexPct: 12.5,
-        facilityTaxPct: 2,
         includeSaleCost: true,
         sellTaxPct: 4.5,
         sellBrokerPct: 3,
       }),
     );
-    expect(params.systemCostIndex).toBeCloseTo(0.125, 10);
-    expect(params.facilityTax).toBeCloseTo(0.02, 10);
     expect(params.salesTax).toBeCloseTo(0.045, 10);
     expect(params.brokerFee).toBeCloseTo(0.03, 10);
   });
 
-  it("folds structure + rig bonuses into the engine's meBonus/costBonus/structureTePct", () => {
+  it("passes facilityProfiles through to ProfitParams", () => {
+    const profiles = defaultFacilityProfiles();
     const params = composeProfitParams(
-      baseInput({
-        structure: "raitaru",
-        rigMePct: 2,
-        rigTePct: 5,
-        rigCostPct: 10,
-      }),
+      baseInput({ facilityProfiles: profiles }),
     );
-    expect(params.meBonus).toBeCloseTo(0.99 * (1 - 2 / 100), 10);
-    expect(params.structureTePct).toBe(15 + 5);
-    expect(params.costBonus).toBeCloseTo(1 - (1 - 0.03) * (1 - 0.1), 10);
+    expect(params.facilityProfiles).toBe(profiles);
+  });
+
+  it("passes ignoreSideProducts through to ProfitParams", () => {
+    const params = composeProfitParams(
+      baseInput({ ignoreSideProducts: false }),
+    );
+    expect(params.ignoreSideProducts).toBe(false);
   });
 });

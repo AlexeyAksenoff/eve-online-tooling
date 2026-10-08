@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { FeesFromCharacter } from "../../components/FeesFromCharacter";
 import {
   RegionSelect,
@@ -6,8 +7,25 @@ import {
 import { CheckboxGroup, Field } from "../../components/forms";
 import { BasisSelect, Num, Tabs } from "./components";
 import { CostIndexField } from "./CostIndexField";
+import {
+  applyRigBonuses,
+  exportFacilityProfiles,
+  facilityProfileLabel,
+  importFacilityProfiles,
+  saveFacilityProfiles,
+} from "./facilityProfiles";
+import {
+  FACILITY_STRUCTURES,
+  SECURITY_TIERS,
+  type FacilityProfile,
+  type FacilityStructureKey,
+  type SecurityTierKey,
+} from "./types";
 import { toggle } from "../../lib/sets";
-import { STRUCTURES, type StructureKey } from "./types";
+import {
+  productionManufacturingRigs,
+  type RigTypeInfo,
+} from "../../lib/api/production";
 import type { WorkbenchState } from "./workbenchTypes";
 
 export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
@@ -62,18 +80,7 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
     setTe,
     timeSkill,
     setTimeSkill,
-    structure,
-    setStructure,
-    rigMePct,
-    setRigMePct,
-    rigTePct,
-    setRigTePct,
-    rigCostPct,
-    setRigCostPct,
-    costIndexPct,
-    setCostIndexPct,
-    facilityTaxPct,
-    setFacilityTaxPct,
+    facilityProfiles,
     blueprintCostPerRun,
     setBlueprintCostPerRun,
     inventionSkill,
@@ -322,51 +329,24 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
               min={0}
               max={5}
             />
-            <Field label="Structure">
-              <select
-                value={structure}
-                onChange={(e) =>
-                  setStructure(e.currentTarget.value as StructureKey)
-                }
-                className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
-                title="Engineering complex role bonuses: material, cost, and time. SCC 4% surcharge is applied automatically."
-              >
-                {Object.entries(STRUCTURES).map(([k, s]) => (
-                  <option key={k} value={k}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
+
+            {/* Facility profile preview (configured in the Facilities tab) */}
+            <Field label="Manufacturing facility">
+              <div className="text-sm text-zinc-300">
+                {facilityProfileLabel(facilityProfiles.manufacturing)}
+              </div>
+              <div className="mt-1 text-[11px] text-zinc-500">
+                Configure structure, rigs, cost index, and tax in the
+                <button
+                  onClick={() => setTab("facilities")}
+                  className="ml-1 underline hover:text-zinc-300"
+                >
+                  Facilities tab
+                </button>
+                .
+              </div>
             </Field>
-            <Num
-              label="Rig ME %"
-              value={rigMePct}
-              onChange={setRigMePct}
-              min={0}
-              max={10}
-            />
-            <Num
-              label="Rig TE %"
-              value={rigTePct}
-              onChange={setRigTePct}
-              min={0}
-              max={50}
-            />
-            <Num
-              label="Rig cost %"
-              value={rigCostPct}
-              onChange={setRigCostPct}
-              min={0}
-              max={10}
-            />
-            <CostIndexField value={costIndexPct} onChange={setCostIndexPct} />
-            <Num
-              label="Facility tax %"
-              value={facilityTaxPct}
-              onChange={setFacilityTaxPct}
-              min={0}
-              step={0.1}
-            />
+
             <Num
               label="Blueprint cost / run"
               value={blueprintCostPerRun}
@@ -404,10 +384,6 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
                 ))}
               </select>
             </Field>
-            <div className="col-span-2 self-end text-[11px] text-zinc-500 md:col-span-4">
-              Rig % compose with the structure preset (you supply the
-              security-adjusted bonus).
-            </div>
           </div>
         )}
 
@@ -466,7 +442,266 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
             </Field>
           </div>
         )}
+
+        {tab === "facilities" && <FacilityProfilePanel wb={wb} />}
       </div>
     </>
+  );
+}
+
+/** Panel for configuring the two facility profile slots (Manufacturing +
+ *  Reaction). See `FacilityProfile` type for field meanings. */
+function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
+  const {
+    facilityProfiles,
+    setFacilityProfiles,
+    selectedProfile,
+    setSelectedProfile,
+  } = wb;
+  const profile = facilityProfiles[selectedProfile];
+
+  // Apply a patch to the active profile, then recompose its rig bonuses from
+  // the structure + security + selected rig type IDs. Running this on *every*
+  // change (structure / security / rigs) is what fixes the stale-bonus bug
+  // where switching structure or security left the old rig+structure bonus
+  // in place — applyRigBonuses is only invoked here, not at each call site.
+  const update = async (patches: Partial<FacilityProfile>) => {
+    const next = { ...profile, ...patches } as FacilityProfile;
+    const composed = await applyRigBonuses(next, next.rigTypeIds ?? []);
+    setFacilityProfiles({
+      ...facilityProfiles,
+      [selectedProfile]: composed,
+    });
+  };
+
+  const structureOptions = Object.entries(FACILITY_STRUCTURES).filter(
+    ([, s]) => s.facilityType === selectedProfile,
+  );
+
+  return (
+    <div className="space-y-3">
+      {/* Slot switcher: Manufacturing | Reaction */}
+      <div className="flex gap-2">
+        <button
+          onClick={() => setSelectedProfile("manufacturing")}
+          className={`rounded px-3 py-1.5 text-sm ${
+            selectedProfile === "manufacturing"
+              ? "bg-zinc-700 text-zinc-100"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          Manufacturing
+        </button>
+        <button
+          onClick={() => setSelectedProfile("reaction")}
+          className={`rounded px-3 py-1.5 text-sm ${
+            selectedProfile === "reaction"
+              ? "bg-zinc-700 text-zinc-100"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          Reaction
+        </button>
+      </div>
+
+      {/* Profile label */}
+      <div className="text-xs text-zinc-500">
+        Active: {facilityProfileLabel(profile)}
+        {profile.systemCostIndex === null && (
+          <span className="ml-2 text-amber-400">
+            (approximate — no live cost index)
+          </span>
+        )}
+      </div>
+
+      {/* Structure dropdown */}
+      <Field label="Structure">
+        <select
+          value={profile.structure}
+          onChange={(e) =>
+            update({ structure: e.target.value as FacilityStructureKey })
+          }
+          className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
+        >
+          {structureOptions.map(([key, s]) => (
+            <option key={key} value={key}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      {/* Security tier dropdown */}
+      <Field label="Security">
+        <select
+          value={profile.security}
+          onChange={(e) =>
+            update({ security: e.target.value as SecurityTierKey })
+          }
+          className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
+        >
+          {Object.entries(SECURITY_TIERS).map(([key, s]) => (
+            <option key={key} value={key as SecurityTierKey}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      {/* Rig selector — checkboxes from SDE-backed rig type list */}
+      <Field label="Rig modules">
+        <RigSelector
+          selectedIds={profile.rigTypeIds ?? []}
+          onChange={(newIds) => {
+            void update({ rigTypeIds: newIds });
+          }}
+        />
+      </Field>
+
+      {/* Cost index: live-fill from a build system, or a manual fraction.
+          `null` = wormhole (no live index). The field auto-fills from ESI
+          `/industry/systems/` like the rest of the app; tax rate has no live
+          source so it stays a manual override. Cost-index changes don't affect
+          rig bonuses, so set the field directly (no applyRigBonuses roundtrip). */}
+      <CostIndexField
+        value={profile.systemCostIndex}
+        onChange={(ci) =>
+          setFacilityProfiles({
+            ...facilityProfiles,
+            [selectedProfile]: { ...profile, systemCostIndex: ci },
+          })
+        }
+      />
+      <Field label="Tax rate (fraction)">
+        <input
+          type="number"
+          value={profile.taxRate ?? ""}
+          onChange={(e) =>
+            setFacilityProfiles({
+              ...facilityProfiles,
+              [selectedProfile]: {
+                ...profile,
+                taxRate: e.target.value ? Number(e.target.value) : null,
+              },
+            })
+          }
+          step={0.01}
+          min={0}
+          max={1}
+          placeholder="0–1 (e.g. 0.00 / player HQ)"
+          className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
+        />
+      </Field>
+
+      {/* JSON import / export */}
+      <div className="flex gap-2 pt-2 border-t border-zinc-800">
+        <button
+          onClick={() => {
+            const json = exportFacilityProfiles(facilityProfiles);
+            navigator.clipboard.writeText(json).then(() => {
+              // Visual feedback could be added here
+              console.log("Facility profiles copied to clipboard");
+            });
+          }}
+          className="rounded border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
+        >
+          Export JSON
+        </button>
+        <label className="relative cursor-pointer rounded border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800">
+          Import JSON
+          <input
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const text = await file.text();
+              const restored = importFacilityProfiles(text);
+              setFacilityProfiles(restored);
+              saveFacilityProfiles(restored);
+              e.target.value = "";
+            }}
+          />
+        </label>
+      </div>
+    </div>
+  );
+}
+
+/** Checkbox list of manufacturing rig types, grouped by category (ME / TE /
+ *  Cost). Fetched via `productionManufacturingRigs()` (backend has the
+ *  rig bonus lookup table). When a rig is toggled, `onChange` fires with
+ *  the updated `typeId[]` list. */
+function RigSelector({
+  selectedIds,
+  onChange,
+}: {
+  selectedIds: number[];
+  onChange: (ids: number[]) => void;
+}) {
+  const { data: rigs } = useQuery({
+    queryKey: ["production", "manufacturing-rigs"],
+    queryFn: productionManufacturingRigs,
+    staleTime: Infinity,
+  });
+
+  if (!rigs) {
+    return <div className="text-xs text-zinc-500">Loading rigs…</div>;
+  }
+
+  const byCat: Record<string, RigTypeInfo[]> = {};
+  for (const r of rigs) {
+    (byCat[r.category] ??= []).push(r);
+  }
+
+  const selected = new Set(selectedIds);
+
+  return (
+    <div className="space-y-2 text-sm">
+      {(["me", "te", "cost"] as const).map((cat) => {
+        const items = byCat[cat];
+        if (!items?.length) return null;
+        const label = { me: "Material (ME)", te: "Time (TE)", cost: "Cost" }[
+          cat
+        ];
+        return (
+          <div key={cat}>
+            <div className="mb-1 text-xs font-medium text-zinc-400">
+              {label}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {items.map((r) => (
+                <label
+                  key={r.typeId}
+                  className="flex items-center gap-1.5 text-xs"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(r.typeId)}
+                    onChange={(e) => {
+                      const ids = e.target.checked
+                        ? [...selectedIds, r.typeId]
+                        : selectedIds.filter((id) => id !== r.typeId);
+                      onChange(ids);
+                    }}
+                    className="h-3 w-3 rounded border-zinc-600 bg-zinc-800 text-indigo-600"
+                  />
+                  <span
+                    className={
+                      r.tier === "T2" ? "text-amber-300" : "text-zinc-300"
+                    }
+                  >
+                    {r.tier}:
+                  </span>
+                  <span className="text-zinc-200">{r.name}</span>
+                  <span className="text-zinc-500">(+{r.bonus}%)</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }

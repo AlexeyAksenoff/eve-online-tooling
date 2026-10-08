@@ -1,5 +1,5 @@
 import type { OwnedBlueprint, PriceBasis, ProfitParams } from "../../lib/api";
-import { STRUCTURES, type ImportedBlueprint, type StructureKey } from "./types";
+import { type ImportedBlueprint, type FacilityProfiles } from "./types";
 
 /**
  * Best researched ME/TE per blueprint type: the highest across owned copies,
@@ -21,31 +21,6 @@ export function bestResearchedMap(
   for (const b of imported)
     map[b.typeId] = Math.max(map[b.typeId] ?? 0, b[importedField]);
   return map;
-}
-
-/**
- * Compose the manufacturing structure preset with the user-supplied rig
- * bonuses into the three multipliers the pricing engine consumes:
- * - `structureTePct`: additive — structure base time bonus + rig time bonus.
- * - `meBonus`: multiplicative material bonus — structure × rig, so an
- *   unbonused structure (NPC station, `meBonus: 1.0`) with no rig stays
- *   exactly `1.0` (no discount).
- * - `costBonus`: combined cost-index discount, composed multiplicatively on
- *   what's left after the first discount (not simple addition), matching how
- *   EVE stacks structure + rig cost bonuses.
- */
-export function composeStructureBonuses(
-  structure: StructureKey,
-  rigMePct: number,
-  rigTePct: number,
-  rigCostPct: number,
-): { structureTePct: number; meBonus: number; costBonus: number } {
-  const preset = STRUCTURES[structure];
-  return {
-    structureTePct: preset.tePct + rigTePct,
-    meBonus: preset.meBonus * (1 - rigMePct / 100),
-    costBonus: 1 - (1 - preset.costBonus) * (1 - rigCostPct / 100),
-  };
 }
 
 /**
@@ -99,15 +74,9 @@ export interface ComposeProfitParamsInput {
   te: number;
   ownedTe: Record<number, number>;
   timeSkill: number;
-  structure: StructureKey;
-  rigMePct: number;
-  rigTePct: number;
-  rigCostPct: number;
   useStock: boolean;
   stock: Record<number, number> | undefined;
   buildComponents: boolean;
-  costIndexPct: number;
-  facilityTaxPct: number;
   includeSaleCost: boolean;
   sellTaxPct: number;
   sellBrokerPct: number;
@@ -117,6 +86,8 @@ export interface ComposeProfitParamsInput {
   inventionSkill: number;
   decryptorTypeId: number | null;
   productBestHub: boolean;
+  facilityProfiles: FacilityProfiles;
+  ignoreSideProducts: boolean;
 }
 
 /**
@@ -129,12 +100,6 @@ export interface ComposeProfitParamsInput {
 export function composeProfitParams(
   input: ComposeProfitParamsInput,
 ): ProfitParams {
-  const { structureTePct, meBonus, costBonus } = composeStructureBonuses(
-    input.structure,
-    input.rigMePct,
-    input.rigTePct,
-    input.rigCostPct,
-  );
   return {
     regionId: input.regionId,
     stationId: input.stationId,
@@ -144,13 +109,8 @@ export function composeProfitParams(
     te: input.te,
     ownedTe: input.useOwnedMe ? input.ownedTe : {},
     timeSkill: input.timeSkill,
-    structureTePct,
-    meBonus,
-    costBonus,
     stock: resolveStock(input.useStock, input.stock),
     buildComponents: input.buildComponents,
-    systemCostIndex: input.costIndexPct / 100,
-    facilityTax: input.facilityTaxPct / 100,
     includeSalesCost: input.includeSaleCost,
     salesTax: input.sellTaxPct / 100,
     brokerFee: input.sellBrokerPct / 100,
@@ -160,5 +120,7 @@ export function composeProfitParams(
     inventionSkillLevel: input.inventionSkill,
     decryptorTypeId: input.decryptorTypeId,
     productBestHub: input.productBestHub,
+    facilityProfiles: input.facilityProfiles,
+    ignoreSideProducts: input.ignoreSideProducts,
   };
 }

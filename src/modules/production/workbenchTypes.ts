@@ -12,9 +12,9 @@ import type {
 } from "../../lib/api";
 import type { PasteVerdictResult } from "./helpers";
 import type {
+  FacilityProfiles,
   ImportedBlueprint,
   ResultsView,
-  StructureKey,
   Tab,
 } from "./types";
 
@@ -52,18 +52,6 @@ export interface WorkbenchState {
   setTe: (n: number) => void;
   timeSkill: number;
   setTimeSkill: (n: number) => void;
-  structure: StructureKey;
-  setStructure: (s: StructureKey) => void;
-  rigMePct: number;
-  setRigMePct: (n: number) => void;
-  rigTePct: number;
-  setRigTePct: (n: number) => void;
-  rigCostPct: number;
-  setRigCostPct: (n: number) => void;
-  costIndexPct: number;
-  setCostIndexPct: (n: number) => void;
-  facilityTaxPct: number;
-  setFacilityTaxPct: (n: number) => void;
   includeSaleCost: boolean;
   setIncludeSaleCost: (b: boolean) => void;
   sellBrokerPct: number;
@@ -82,6 +70,15 @@ export interface WorkbenchState {
   setInventionSkill: (n: number) => void;
   decryptorTypeId: number | null;
   setDecryptorTypeId: (id: number | null) => void;
+
+  // Facility profiles: two slots (Manufacturing + Reaction) with separate
+  // structure/security/rig bonuses. Threaded through ProfitParams to the
+  // Rust engine so each build step is costed against the right facility.
+  facilityProfiles: FacilityProfiles;
+  setFacilityProfiles: (p: FacilityProfiles) => void;
+  /** Which profile slot is currently being edited in the UI. */
+  selectedProfile: "manufacturing" | "reaction";
+  setSelectedProfile: (s: "manufacturing" | "reaction") => void;
 
   name: string;
   setName: (s: string) => void;

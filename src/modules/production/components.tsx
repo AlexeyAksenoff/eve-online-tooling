@@ -404,6 +404,7 @@ export function Tabs({
     { value: "industry", label: "Industry" },
     { value: "thresholds", label: "Thresholds" },
     { value: "paste", label: "Paste list" },
+    { value: "facilities", label: "Facilities" },
   ];
   return (
     <div className="mt-4 inline-flex rounded border border-zinc-800 bg-zinc-900 p-0.5">

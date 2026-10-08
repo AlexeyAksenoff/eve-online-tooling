@@ -94,9 +94,41 @@ export const commands = {
       else return { status: "error", error: e as AppError };
     }
   },
+  /**
+   * All known manufacturing rig types with their bonus descriptions.
+   */
+  async productionManufacturingRigs(): Promise<
+    Result<RigTypeInfo[], AppError>
+  > {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("production_manufacturing_rigs"),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as AppError };
+    }
+  },
+  /**
+   * Compute rig bonuses from a set of rig type IDs + security tier.
+   * Returns `[meBonus, teBonusPct, costBonusPct]`.
+   */
+  async productionRigBonuses(args: {
+    rigTypeIds: number[];
+    securityTier: SecurityTier;
+  }): Promise<Result<[number, number, number], AppError>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("production_rig_bonuses", { ...args }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as AppError };
+    }
+  },
 };
-
-/** user-defined events **/
 
 /** user-defined constants **/
 
@@ -140,6 +172,75 @@ export type Decryptor = {
    */
   runModifier: number;
 };
+/**
+ * A production-capacity profile: the facility a job runs in, with its
+ * structure/rig/security bonuses composed. One profile per facility type
+ * (manufacturing vs. reaction); passed through the recursive build-vs-buy
+ * tree so each step is costed against the right facility.
+ *
+ * The `me_bonus`/`te_bonus_pct`/`cost_bonus` fields here are the **final
+ * composed multipliers** (structure × rig), not raw rig percentages — the
+ * frontend computes them the same way `composeStructureBonuses` does today
+ * and hands them in pre-composed, so the engine stays flat and pure.
+ */
+export type FacilityProfile = {
+  /**
+   * Which activity this profile applies to (drives structure preset).
+   */
+  facilityType: FacilityType;
+  /**
+   * The structure type (Raitaru, Tatara, etc.) or NPC station.
+   */
+  structure: StructureType;
+  /**
+   * Security tier of the system (determines approximate-ness).
+   */
+  security: SecurityTier;
+  /**
+   * Combined structure+rig material multiplier (e.g. 0.97 = −3%).
+   */
+  meBonus: number;
+  /**
+   * Combined structure+rig TE bonus in percent (e.g. 20 = −20% time).
+   */
+  teBonusPct: number;
+  /**
+   * Combined structure+rig cost saving on cost-index portion (fraction).
+   */
+  costBonus: number;
+  /**
+   * Tatara role-bonus time multiplier (0.25 for Tatara, 0 otherwise).
+   */
+  roleBonusTime: number;
+  /**
+   * System cost index (0..1), or `None` for WH (manual override).
+   */
+  systemCostIndex: number | null;
+  /**
+   * Facility tax rate (0..1), or `None` for manual override.
+   */
+  taxRate: number | null;
+  /**
+   * Selected rig type IDs (from `production_manufacturing_rigs`).
+   * Bonuses are computed from these + structure + security.
+   */
+  rigTypeIds: number[];
+};
+/**
+ * A pair of facility profiles: one for manufacturing steps, one for reaction
+ * steps. Passed through the build-vs-buy tree so each `Activity::Manufacturing`
+ * node uses the manufacturing facility and each `Activity::Reaction` node uses
+ * the reaction facility.
+ */
+export type FacilityProfiles = {
+  manufacturing: FacilityProfile;
+  reaction: FacilityProfile;
+};
+/**
+ * Facility type for a [`FacilityProfile`]. Manufacturing profiles use
+ * Upwell-structures or NPC stations; reaction profiles use Athanor/Tatara.
+ */
+export type FacilityType = "manufacturing" | "reaction";
 /**
  * Invention cost detail for the drill-down (T2 items).
  */
@@ -225,6 +326,31 @@ export type ProfitBreakdown = {
   unitsProduced: number;
   materialCost: number;
   jobFee: number;
+  /**
+   * Manufacturing system cost index used for this row's facility jobs.
+   */
+  manufacturingCostIndex: number;
+  /**
+   * Total install cost (job fee) for manufacturing, in ISK.
+   */
+  manufacturingInstallCost: number;
+  /**
+   * Total manufacturing job time for this row, in seconds (all runs).
+   */
+  manufacturingTimeSeconds: number;
+  /**
+   * Reaction install cost (job fee) for the top-level step, in ISK.
+   */
+  reactionInstallCost: number;
+  /**
+   * Total reaction job time for this row, in seconds (all runs).
+   */
+  reactionTimeSeconds: number;
+  /**
+   * Whether the result is approximate (facility cost index or tax is None —
+   * e.g. wormhole space with a manual override).
+   */
+  approximate: boolean;
   /**
    * Amortized blueprint acquisition cost for this job (per-run cost × runs).
    */
@@ -385,7 +511,40 @@ export type ProfitParams = {
    * Broker fee fraction applied to revenue (when `include_sales_cost`).
    */
   brokerFee?: number;
+  /**
+   * Facility profiles for manufacturing and reaction steps. When `Some`,
+   * each build step selects its profile by activity (via
+   * [`FacilityProfiles::for_activity`]); when `None`, the flat
+   * `me_bonus`/`cost_bonus`/`system_cost_index`/`facility_tax` fields are
+   * used as-is (backward compatibility with the old single-structure API).
+   */
+  facilityProfiles?: FacilityProfiles | null;
+  /**
+   * Whether to ignore side products (reaction by-products) in the build vs.
+   * buy decision. When `true` (default), side products are not valued as
+   * additional revenue — only the main product's profit is computed.
+   */
+  ignoreSideProducts?: boolean;
 };
+/**
+ * Security tier of the system the facility sits in. Wormhole systems have
+ * no live cost index, so results there are marked approximate.
+ */
+export type SecurityTier = "highsec" | "lowsec" | "nullsec" | "wormhole";
+/** One manufacturing rig type with its bonus info. */
+export type RigTypeInfo = {
+  typeId: number;
+  name: string;
+  category: string;
+  tier: string;
+  bonus: number;
+};
+/**
+ * Upwell structure (or NPC station) type that hosts a manufacturing or
+ * reaction job. Drives the base ME/TE/cost-index multipliers.
+ */
+export type StructureType =
+  "npcStation" | "raitaru" | "azbel" | "sotiyo" | "athanor" | "tatara";
 
 /** tauri-specta globals **/
 

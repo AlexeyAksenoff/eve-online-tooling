@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 use crate::esi::EsiClient;
@@ -180,6 +180,19 @@ pub struct ProfitParams {
     /// Broker fee fraction applied to revenue (when `include_sales_cost`).
     #[serde(default)]
     pub broker_fee: f64,
+    /// Facility profiles for manufacturing and reaction steps. When `Some`,
+    /// each build step selects its profile by activity (via
+    /// [`FacilityProfiles::for_activity`]); when `None`, the flat
+    /// `me_bonus`/`cost_bonus`/`system_cost_index`/`facility_tax` fields are
+    /// used as-is (backward compatibility with the old single-structure API).
+    #[serde(default)]
+    pub facility_profiles: Option<super::engine::FacilityProfiles>,
+    /// Whether to ignore side products (reaction by-products) in the build vs.
+    /// buy decision. When `true` (default), side products are not valued as
+    /// additional revenue — only the main product's profit is computed.
+    #[serde(default = "default_ignore_side_products")]
+    #[allow(dead_code)]
+    pub ignore_side_products: bool,
 }
 
 fn default_build_components() -> bool {
@@ -191,6 +204,10 @@ fn default_me_bonus() -> f64 {
 }
 fn default_scc() -> f64 {
     0.04
+}
+
+fn default_ignore_side_products() -> bool {
+    true
 }
 
 /// Base material efficiency of a freshly invented T2 blueprint copy (no
@@ -348,18 +365,26 @@ pub async fn production_profit(
         invention_skill_multiplier,
         me_bonus: params.me_bonus,
         cost_bonus: params.cost_bonus,
+        structure_te_pct: params.structure_te_pct,
+        role_bonus_time: params
+            .facility_profiles
+            .as_ref()
+            .map(|p| p.reaction.role_bonus_time)
+            .unwrap_or(0.0),
         scc_surcharge: params.scc_surcharge,
         include_sales_cost: params.include_sales_cost,
         sales_tax: params.sales_tax,
         broker_fee: params.broker_fee,
+        facility_profiles: params.facility_profiles.clone(),
     };
 
     let meta = crate::sde::cached_meta_group_names(&dir)?;
     let categories = crate::sde::cached_category_names(&dir)?;
     let groups = crate::sde::cached_group_names(&dir)?;
     let base_times = sde.base_times(1).map_err(|e| e.to_string())?; // 1 = manufacturing
-                                                                    // Names for the T1 (or T3 relic) blueprint each T2/T3 row is invented
-                                                                    // from, so the UI can show what a "build" actually starts from.
+    let base_times_rxn = sde.base_times(11).map_err(|e| e.to_string())?; // 11 = reaction
+                                                                         // Names for the T1 (or T3 relic) blueprint each T2/T3 row is invented
+                                                                         // from, so the UI can show what a "build" actually starts from.
     let base_bp_ids: Vec<i64> = steps
         .iter()
         .filter_map(|s| s.invention.as_ref().map(|i| i.base_blueprint_type_id))
@@ -374,7 +399,51 @@ pub async fn production_profit(
     // Industry (−3%/lvl) × structure TE bonus.
     let l = params.time_skill.clamp(0, 5) as f64;
     let time_skill_mult = (1.0 - 0.04 * l) * (1.0 - 0.03 * l);
-    let structure_te_mult = 1.0 - params.structure_te_pct / 100.0;
+    // Profile-aware TE bonus: from the facility profile if configured, else
+    // the flat `structure_te_pct` (backward compat).
+    let mfg_te_bonus_pct = config.te_bonus_pct_for(super::engine::Activity::Manufacturing);
+    let mfg_te_mult = 1.0 - mfg_te_bonus_pct / 100.0;
+
+    // Walk a build tree and sum the reaction-job time (seconds) for all
+    // Reaction sub-steps. Reactions get no Industry-skill bonus, but do get
+    // the reaction facility's TE bonus and role-bonus time (Tatara −25%).
+    fn reaction_time_for_step(
+        step: &BuildStep,
+        base_times_rxn: &HashMap<i64, i64>,
+        params: &ProfitParams,
+        config: &ProfitConfig,
+        runs: i64,
+        depth: u32,
+    ) -> f64 {
+        if depth == 0 {
+            return 0.0;
+        }
+        let mut total = 0.0;
+        if step.activity == super::engine::Activity::Reaction {
+            if let Some(&base) = base_times_rxn.get(&step.blueprint_type_id) {
+                let te = params
+                    .owned_te
+                    .get(&step.blueprint_type_id)
+                    .copied()
+                    .unwrap_or(params.te);
+                let te_bonus = config.te_bonus_pct_for(super::engine::Activity::Reaction);
+                let role_bonus = config.role_bonus_time_for(super::engine::Activity::Reaction);
+                // Reaction time = base × runs × (1 − blueprint_TE) × (1 − facility_TE) × (1 − role_bonus)
+                total += base as f64
+                    * runs as f64
+                    * (1.0 - te as f64 / 100.0)
+                    * (1.0 - te_bonus / 100.0)
+                    * (1.0 - role_bonus);
+            }
+        }
+        for input in &step.inputs {
+            if let Sourcing::Build(sub) = &input.sourcing {
+                total +=
+                    reaction_time_for_step(sub, base_times_rxn, params, config, runs, depth - 1);
+            }
+        }
+        total
+    }
 
     let mut out: Vec<ProfitBreakdown> = steps
         .iter()
@@ -395,19 +464,30 @@ pub async fn production_profit(
                 &config,
                 &params.stock,
             );
-            // Job time = base × runs × (1 − TE/100) × skill × structure.
+            // Manufacturing job time = base × runs × (1 − TE/100) × skill × facility_TE.
             let te = params
                 .owned_te
                 .get(&step.blueprint_type_id)
                 .copied()
                 .unwrap_or(params.te);
             if let Some(&base) = base_times.get(&step.blueprint_type_id) {
-                bd.job_time_seconds = base as f64
+                let time = base as f64
                     * params.runs as f64
                     * (1.0 - te as f64 / 100.0)
                     * time_skill_mult
-                    * structure_te_mult;
+                    * mfg_te_mult;
+                bd.job_time_seconds = time;
+                bd.manufacturing_time_seconds = time;
             }
+            // Reaction sub-build time (walk the tree).
+            bd.reaction_time_seconds = reaction_time_for_step(
+                step,
+                &base_times_rxn,
+                &params,
+                &config,
+                params.runs,
+                MAX_TREE_DEPTH,
+            );
             bd.meta_group = Some(
                 meta.get(&bd.product_type_id)
                     .cloned()
@@ -524,6 +604,87 @@ pub fn production_set_list(
     lists::set_from_app(&app, key, type_id, add).map_err(Into::into)
 }
 
+// --- Rig bonus computation (from well-known rig type IDs) ---
+
+/// A known manufacturing rig type with its bonus description.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RigTypeInfo {
+    pub type_id: i64,
+    pub name: String,
+    pub category: String,
+    pub tier: String,
+    pub bonus: f64,
+}
+
+/// All known manufacturing rig types (for the UI checkbox list). Type IDs and
+/// bonus values are well-known EVE constants (see `rig_bonus_lookup`).
+#[tauri::command]
+#[specta::specta]
+pub fn production_manufacturing_rigs() -> Vec<RigTypeInfo> {
+    use super::engine::{rig_bonus_lookup, RigBonus};
+    let ids = [
+        1955, 1956, 1957, 1958, 1959, 1960, 1961, 1962, 1963, 1964, 1965, 1966,
+    ];
+    ids.iter()
+        .filter_map(|&id| {
+            let RigBonus {
+                me_pct,
+                te_pct,
+                cost_pct,
+                is_t2,
+            } = rig_bonus_lookup(id)?;
+            let (category, bonus) = if me_pct > 0.0 {
+                ("me", me_pct)
+            } else if te_pct > 0.0 {
+                ("te", te_pct)
+            } else {
+                ("cost", cost_pct)
+            };
+            Some(RigTypeInfo {
+                type_id: id,
+                name: rig_type_name(id),
+                category: category.to_string(),
+                tier: if is_t2 { "T2" } else { "T1" }.to_string(),
+                bonus,
+            })
+        })
+        .collect()
+}
+
+/// Human-readable name for a known rig type ID (hardcoded since the rig type
+/// names are stable and we don't want a full SDE query for a dropdown list).
+fn rig_type_name(id: i64) -> String {
+    match id {
+        1955 => "Medium Manufacturing Time Rig I",
+        1956 => "Medium Manufacturing Time Rig II",
+        1957 => "Medium Manufacturing Material Rig I",
+        1958 => "Medium Manufacturing Material Rig II",
+        1959 => "Medium Manufacturing Cost Rig I",
+        1960 => "Medium Manufacturing Cost Rig II",
+        1961 => "Small Manufacturing Time Rig I",
+        1962 => "Small Manufacturing Time Rig II",
+        1963 => "Small Manufacturing Material Rig I",
+        1964 => "Small Manufacturing Material Rig II",
+        1965 => "Small Manufacturing Cost Rig I",
+        1966 => "Small Manufacturing Cost Rig II",
+        _ => "Unknown rig",
+    }
+    .to_string()
+}
+
+/// Resolve a set of rig type IDs + security tier into `(meBonus, teBonusPct,
+/// costBonusPct)` using the well-known rig bonus table. The frontend calls
+/// this when the user toggles rigs in the Facilities tab.
+#[tauri::command]
+#[specta::specta]
+pub fn production_rig_bonuses(
+    rig_type_ids: Vec<i64>,
+    security_tier: super::engine::SecurityTier,
+) -> (f64, f64, f64) {
+    super::engine::rig_bonuses_from_ids(&rig_type_ids, security_tier)
+}
+
 // --- Live per-system industry cost index (ESI /industry/systems/) ---
 
 #[derive(Deserialize)]
@@ -600,6 +761,8 @@ pub fn specta_commands() -> tauri_specta::Commands<tauri::Wry> {
         production_get_list,
         production_set_list,
         production_system_cost_index,
+        production_manufacturing_rigs,
+        production_rig_bonuses,
     ]
 }
 
@@ -902,6 +1065,12 @@ mod reprice_tests {
             units_produced: 10,
             material_cost: 60.0,
             job_fee: 40.0,
+            manufacturing_cost_index: 0.0,
+            manufacturing_install_cost: 40.0,
+            manufacturing_time_seconds: 0.0,
+            reaction_install_cost: 0.0,
+            reaction_time_seconds: 0.0,
+            approximate: false,
             blueprint_cost: 0.0,
             invention_cost: 0.0,
             invention: None,

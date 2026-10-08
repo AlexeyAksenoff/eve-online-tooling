@@ -6,6 +6,8 @@ import {
   type PriceBasis,
   type ProfitBreakdown,
   type ProfitParams,
+  type RigTypeInfo,
+  type SecurityTier,
 } from "./generated/production";
 import { unwrapCommand } from "./common";
 
@@ -16,6 +18,8 @@ export type {
   PriceBasis,
   ProfitBreakdown,
   ProfitParams,
+  RigTypeInfo,
+  SecurityTier,
 };
 
 /** Rank every manufacturable item by build-vs-buy profit at the chosen market. */
@@ -36,4 +40,21 @@ export async function productionSystemCostIndex(
   systemId: number,
 ): Promise<number | null> {
   return unwrapCommand(await commands.productionSystemCostIndex(systemId));
+}
+
+/** All known manufacturing rig types with their bonuses (for the Facilities
+ *  tab's rig selector). */
+export async function productionManufacturingRigs(): Promise<RigTypeInfo[]> {
+  return unwrapCommand(await commands.productionManufacturingRigs());
+}
+
+/** Compute rig bonuses from a set of selected rig type IDs + security tier.
+ *  Returns `[meBonus, teBonusPct, costBonusPct]`. */
+export async function productionRigBonuses(
+  rigTypeIds: number[],
+  securityTier: SecurityTier,
+): Promise<[number, number, number]> {
+  return unwrapCommand(
+    await commands.productionRigBonuses({ rigTypeIds, securityTier }),
+  );
 }
