@@ -54,7 +54,7 @@ function baseInput(
     inventionSkill: 5,
     decryptorTypeId: null,
     productBestHub: false,
-        facilityProfiles: defaultFacilityProfiles(),
+    facilityProfiles: defaultFacilityProfiles(),
     ignoreSideProducts: true,
     implant: null,
     ...overrides,
@@ -162,7 +162,7 @@ describe("composeProfitParams", () => {
     expect(params.ownedTe).toEqual({ 10: 20 });
   });
 
-  it("suppresses the owned ME/TE overlay entirely when the toggle is off", () => {
+    it("always passes ownedMe/ownedTe for sub-component ME resolution (regardless of useOwnedMe)", () => {
     const params = composeProfitParams(
       baseInput({
         useOwnedMe: false,
@@ -170,8 +170,10 @@ describe("composeProfitParams", () => {
         ownedTe: { 10: 20 },
       }),
     );
-    expect(params.ownedMe).toEqual({});
-    expect(params.ownedTe).toEqual({});
+    // ownedMe/ownedTe are always passed through — the Rust engine uses them
+    // for per-component ME/TE in build_unit_cost() regardless of useOwnedMe.
+    expect(params.ownedMe).toEqual({ 10: 10 });
+    expect(params.ownedTe).toEqual({ 10: 20 });
   });
 
   it("nets stock only when useStock is on", () => {
@@ -206,7 +208,7 @@ describe("composeProfitParams", () => {
     expect(params.facilityProfiles).toBe(profiles);
   });
 
-    it("passes ignoreSideProducts through to ProfitParams", () => {
+  it("passes ignoreSideProducts through to ProfitParams", () => {
     const params = composeProfitParams(
       baseInput({ ignoreSideProducts: false }),
     );

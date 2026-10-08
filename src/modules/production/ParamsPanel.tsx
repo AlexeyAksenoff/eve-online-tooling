@@ -581,7 +581,7 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
           `/industry/systems/` like the rest of the app; tax rate has no live
           source so it stays a manual override. Cost-index changes don't affect
           rig bonuses, so set the field directly (no applyRigBonuses roundtrip). */}
-      <CostIndexField
+                  <CostIndexField
         value={profile.systemCostIndex}
         onChange={(ci) =>
           setFacilityProfiles({
@@ -589,8 +589,17 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
             [selectedProfile]: { ...profile, systemCostIndex: ci },
           })
         }
+        systemId={profile.systemId}
+        onSystemChange={(id) =>
+          setFacilityProfiles({
+            ...facilityProfiles,
+            [selectedProfile]: { ...profile, systemId: id },
+          })
+        }
       />
-      <Field label="Tax rate (fraction)">
+    </Field>
+
+    <Field label="Tax rate (fraction)">
         <input
           type="number"
           value={profile.taxRate ?? ""}
@@ -708,8 +717,7 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
               e.target.value = "";
             }}
           />
-                          </label>
-        </div>
+                                            </div>
       </div>
     </div>
   );

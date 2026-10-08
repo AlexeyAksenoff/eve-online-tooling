@@ -69,7 +69,7 @@ export interface WorkbenchState {
   setBlueprintCostPerRun: (n: number) => void;
   inventionSkill: number;
   setInventionSkill: (n: number) => void;
-    decryptorTypeId: number | null;
+  decryptorTypeId: number | null;
   setDecryptorTypeId: (id: number | null) => void;
   implant: ImplantBonus | null;
   setImplant: (b: ImplantBonus | null) => void;
@@ -79,7 +79,7 @@ export interface WorkbenchState {
   // Rust engine so each build step is costed against the right facility.
   facilityProfiles: FacilityProfiles;
   setFacilityProfiles: (p: FacilityProfiles) => void;
-    /** Which profile slot is currently being edited in the UI. */
+  /** Which profile slot is currently being edited in the UI. */
   selectedProfile: "manufacturing" | "reaction" | "components";
   setSelectedProfile: (s: "manufacturing" | "reaction" | "components") => void;
 

@@ -75,6 +75,7 @@ describe("composeFacilityProfile", () => {
     );
     expect(p.systemCostIndex).toBe(null);
     expect(p.taxRate).toBe(null);
+    expect(p.systemId).toBe(null);
   });
 });
 
@@ -96,6 +97,7 @@ describe("defaultComponentsProfile", () => {
     expect(p.structure).toBe("npcStation");
     expect(p.meBonus).toBe(1.0);
     expect(p.rigTypeIds).toEqual([]);
+    expect(p.systemId).toBe(null);
   });
 });
 
@@ -156,7 +158,7 @@ describe("facilityProfileLabel", () => {
 });
 
 describe("JSON export/import round-trip", () => {
-    it("exports and re-imports a profile triple", () => {
+  it("exports and re-imports a profile triple", () => {
     const original = defaultFacilityProfiles();
     const json = exportFacilityProfiles(original);
     const restored = importFacilityProfiles(json);
