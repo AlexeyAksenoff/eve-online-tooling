@@ -52,6 +52,15 @@ function multibuyText(row: ProfitBreakdown): string {
     .join("\n");
 }
 
+/** Reagents for every reaction in a build, as Multibuy `name\tqty` lines. */
+function reactionMultibuyText(row: ProfitBreakdown): string {
+  return row.reactions.lines
+    .flatMap((line) =>
+      line.inputs.map((m) => `${m.name}\t${m.requiredQuantity}`),
+    )
+    .join("\n");
+}
+
 /** A Markdown cost overview for one build — totals plus the material list. */
 function costMarkdown(row: ProfitBreakdown): string {
   const where = row.sellHub ? `sell @ ${row.sellHub}` : (row.market ?? "");
@@ -520,6 +529,19 @@ function BreakdownRow({ row }: { row: ProfitBreakdown }) {
               title="Add this build's materials (the shortfall) to a shopping list"
               className="rounded border border-zinc-700 px-1.5 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800"
             />
+            {row.reactions.lines.length > 0 && (
+              <AddToListButton
+                items={row.reactions.lines.flatMap((line) =>
+                  line.inputs.map((m) => ({
+                    typeId: m.typeId,
+                    quantity: m.requiredQuantity,
+                  })),
+                )}
+                label="Add reactions to list"
+                title="Add every reaction reagent to a shopping list"
+                className="rounded border border-zinc-700 px-1.5 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800"
+              />
+            )}
           </div>
         </div>
         <table className="w-full text-xs">
@@ -624,6 +646,46 @@ function BreakdownRow({ row }: { row: ProfitBreakdown }) {
             </div>
           )}
         </div>
+
+        {row.reactions.lines.length > 0 && (
+          <div className="mt-3">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-xs font-medium text-zinc-400">
+                Reactions ({row.reactions.lines.length})
+              </span>
+              <button
+                onClick={() => copy(reactionMultibuyText(row), "mb")}
+                className="text-xs text-zinc-400 hover:text-zinc-200"
+                title="Copy reaction reagents as multibuy text"
+              >
+                Copy reagents
+              </button>
+            </div>
+            {row.reactions.lines.map((line) => (
+              <div
+                key={line.blueprintTypeId}
+                className="mb-1 rounded border border-zinc-800 p-2 text-xs"
+              >
+                <div className="flex justify-between">
+                  <span className="text-zinc-300">{line.productName}</span>
+                  <span className="text-zinc-500">
+                    ×{line.runs} runs ({line.productPerRun}/run)
+                  </span>
+                </div>
+                <div className="mt-1 grid grid-cols-[1fr_auto] gap-x-2 gap-y-0.5 text-zinc-400">
+                  {line.inputs.map((m) => (
+                    <Fragment key={m.typeId}>
+                      <span>{m.name}</span>
+                      <span className="text-right tabular-nums">
+                        {formatInt(m.requiredQuantity)}
+                      </span>
+                    </Fragment>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {row.invention && (
           <div className="mt-3">
