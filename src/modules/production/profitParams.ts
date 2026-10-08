@@ -1,4 +1,4 @@
-import type { OwnedBlueprint, PriceBasis, ProfitParams } from "../../lib/api";
+import type { OwnedBlueprint, PriceBasis, ProfitParams, ImplantBonus } from "../../lib/api";
 import { type ImportedBlueprint, type FacilityProfiles } from "./types";
 
 /**
@@ -86,8 +86,10 @@ export interface ComposeProfitParamsInput {
   inventionSkill: number;
   decryptorTypeId: number | null;
   productBestHub: boolean;
-  facilityProfiles: FacilityProfiles;
+    facilityProfiles: FacilityProfiles;
   ignoreSideProducts: boolean;
+  /** Character implant/facility module bonuses (time, ME, cost). */
+  implant: ImplantBonus | null;
 }
 
 /**
@@ -104,10 +106,12 @@ export function composeProfitParams(
     regionId: input.regionId,
     stationId: input.stationId,
     runs: input.runs,
-    me: input.me,
-    ownedMe: input.useOwnedMe ? input.ownedMe : {},
+        me: input.me,
+    // ownedMe/ownedTe are always sent for sub-component ME/TE resolution,
+    // regardless of useOwnedMe (which only gates the top-level product).
+    ownedMe: input.ownedMe,
     te: input.te,
-    ownedTe: input.useOwnedMe ? input.ownedTe : {},
+    ownedTe: input.ownedTe,
     timeSkill: input.timeSkill,
     stock: resolveStock(input.useStock, input.stock),
     buildComponents: input.buildComponents,
@@ -120,7 +124,8 @@ export function composeProfitParams(
     inventionSkillLevel: input.inventionSkill,
     decryptorTypeId: input.decryptorTypeId,
     productBestHub: input.productBestHub,
-    facilityProfiles: input.facilityProfiles,
+        facilityProfiles: input.facilityProfiles,
     ignoreSideProducts: input.ignoreSideProducts,
+    implant: input.implant,
   };
 }

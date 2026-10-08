@@ -91,21 +91,37 @@ export function defaultReactionProfile(): FacilityProfile {
   );
 }
 
-/** Default facility profiles pair. */
+/** Default components profile: NPC station, no rigs, no overrides.
+ *  Matches the Rust backend's `FacilityProfile::default()` for components. */
+export function defaultComponentsProfile(): FacilityProfile {
+  return composeFacilityProfile(
+    "components",
+    "npcStation",
+    "highsec",
+    [],
+    null,
+    null,
+  );
+}
+
+/** Default facility profiles triple. */
 export function defaultFacilityProfiles(): FacilityProfiles {
   return {
     manufacturing: defaultManufacturingProfile(),
     reaction: defaultReactionProfile(),
+    components: defaultComponentsProfile(),
   };
 }
 
-/** Whether ANY profile in the pair is approximate. */
+/** Whether ANY profile in the triple is approximate. */
 export function isApproximate(profiles: FacilityProfiles): boolean {
   return (
     profiles.manufacturing.systemCostIndex === null ||
     profiles.manufacturing.taxRate === null ||
     profiles.reaction.systemCostIndex === null ||
-    profiles.reaction.taxRate === null
+    profiles.reaction.taxRate === null ||
+    profiles.components.systemCostIndex === null ||
+    profiles.components.taxRate === null
   );
 }
 
@@ -137,6 +153,10 @@ export function loadFacilityProfiles(): FacilityProfiles {
         reaction: {
           ...defaultReactionProfile(),
           ...parsed.reaction,
+        },
+        components: {
+          ...defaultComponentsProfile(),
+          ...parsed.components,
         },
       };
     }
@@ -172,6 +192,10 @@ export function importFacilityProfiles(json: string): FacilityProfiles {
       reaction: {
         ...defaultReactionProfile(),
         ...parsed.reaction,
+      },
+      components: {
+        ...defaultComponentsProfile(),
+        ...parsed.components,
       },
     };
   } catch {

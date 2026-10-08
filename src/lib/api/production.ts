@@ -1,6 +1,7 @@
 import {
   commands,
   type Decryptor,
+  type ImplantBonus,
   type InventionBreakdown,
   type MaterialLine,
   type PriceBasis,
@@ -13,6 +14,7 @@ import { unwrapCommand } from "./common";
 
 export type {
   Decryptor,
+  ImplantBonus,
   InventionBreakdown,
   MaterialLine,
   PriceBasis,
@@ -46,6 +48,11 @@ export async function productionSystemCostIndex(
  *  tab's rig selector). */
 export async function productionManufacturingRigs(): Promise<RigTypeInfo[]> {
   return unwrapCommand(await commands.productionManufacturingRigs());
+}
+
+/** All known processing (reaction) rig types with their bonus descriptions. */
+export async function productionProcessingRigs(): Promise<RigTypeInfo[]> {
+  return unwrapCommand(await commands.productionProcessingRigs());
 }
 
 /** Compute rig bonuses from a set of selected rig type IDs + security tier.

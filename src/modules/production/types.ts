@@ -31,7 +31,7 @@ export type Tab =
 
 // --- Facility profile types (mirror Rust `FacilityProfile`/`FacilityProfiles`) ---
 
-export type FacilityType = "manufacturing" | "reaction";
+export type FacilityType = "manufacturing" | "reaction" | "components";
 
 export type FacilityStructureKey =
   "npcStation" | "raitaru" | "azbel" | "sotiyo" | "athanor" | "tatara";
@@ -136,11 +136,12 @@ export interface FacilityProfile {
   rigTypeIds: number[];
 }
 
-/** A pair of facility profiles: manufacturing + reaction. Matches Rust
- *  `FacilityProfiles`. */
+/** A triple of facility profiles: manufacturing, reaction, + components.
+ *  Matches Rust `FacilityProfiles`. */
 export interface FacilityProfiles {
   manufacturing: FacilityProfile;
   reaction: FacilityProfile;
+  components: FacilityProfile;
 }
 
 /** Storage key for saved facility profiles. */

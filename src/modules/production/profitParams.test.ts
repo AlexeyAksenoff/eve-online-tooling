@@ -54,8 +54,9 @@ function baseInput(
     inventionSkill: 5,
     decryptorTypeId: null,
     productBestHub: false,
-    facilityProfiles: defaultFacilityProfiles(),
+        facilityProfiles: defaultFacilityProfiles(),
     ignoreSideProducts: true,
+    implant: null,
     ...overrides,
   };
 }
@@ -205,10 +206,23 @@ describe("composeProfitParams", () => {
     expect(params.facilityProfiles).toBe(profiles);
   });
 
-  it("passes ignoreSideProducts through to ProfitParams", () => {
+    it("passes ignoreSideProducts through to ProfitParams", () => {
     const params = composeProfitParams(
       baseInput({ ignoreSideProducts: false }),
     );
     expect(params.ignoreSideProducts).toBe(false);
+  });
+
+  it("passes implant through to ProfitParams", () => {
+    const params = composeProfitParams(
+      baseInput({
+        implant: { time_bonus_pct: 4, material_bonus: 1.0, cost_bonus_pct: 0 },
+      }),
+    );
+    expect(params.implant).toEqual({
+      time_bonus_pct: 4,
+      material_bonus: 1.0,
+      cost_bonus_pct: 0,
+    });
   });
 });

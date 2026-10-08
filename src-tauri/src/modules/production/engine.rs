@@ -32,11 +32,14 @@ pub enum Activity {
 
 /// Facility type for a [`FacilityProfile`]. Manufacturing profiles use
 /// Upwell-structures or NPC stations; reaction profiles use Athanor/Tatara.
+/// Component profiles apply to sub-build steps that are components of a larger
+/// product (T2/T3 ship components, built at a different facility with different rigs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum FacilityType {
     Manufacturing,
     Reaction,
+    Components,
 }
 
 /// Upwell structure (or NPC station) type that hosts a manufacturing or
@@ -168,19 +171,15 @@ pub struct RigBonus {
     pub is_t2: bool,
 }
 
-/// Well-known manufacturing rig type IDs and their bonuses. These are
-/// **game-mechanics constants** — the rig types and their bonus values don't
-/// change with patches (only the type IDs are stable in the SDE). The SDE is
-/// used to confirm a type is a manufacturing rig (by `invTypes.groupID` / name);
-/// the bonus *values* come from CCP's design and are documented on EVE Uni.
+/// Well-known manufacturing and processing rig type IDs and their bonuses.
+/// These are **game-mechanics constants** — the rig types and their bonus values
+/// don't change with patches (only the type IDs are stable in the SDE).
+/// Manufacturing rigs (IDs 1955-1966) work on manufacturing Upwell structures
+/// (Raitaru/Azbel/Sotiyo) and NPC stations; processing rigs (IDs 1967-1978)
+/// work on reaction Upwell structures (Athanor/Tatara).
 ///
 /// T1 rigs: full bonus. T2 rigs: scaled by `t2_rig_security_multiplier`.
 /// Small rigs give ~50% of medium bonuses (game design, not SDE data).
-///
-/// N.B. Only Manufacturing rigs (type IDs 1955-1966) are modelled here —
-/// Processing/reaction rigs (specific to Upwell reactor modules, and per the
-/// EVE Uni "Reactions" article, specific to the reactor type) are left for a
-/// follow-up once their exact type IDs are confirmed (#rig-bonuses).
 pub fn rig_bonus_lookup(type_id: i64) -> Option<RigBonus> {
     let b = match type_id {
         // Medium manufacturing rigs
@@ -251,12 +250,86 @@ pub fn rig_bonus_lookup(type_id: i64) -> Option<RigBonus> {
             cost_pct: 1.5,
             is_t2: false,
         },
-        1966 => RigBonus {
+                1966 => RigBonus {
             me_pct: 0.0,
             te_pct: 0.0,
             cost_pct: 2.0,
             is_t2: true,
         },
+        // Medium processing rigs (reaction activity)
+        1967 => RigBonus {
+            me_pct: 0.0,
+            te_pct: 4.0,
+            cost_pct: 0.0,
+            is_t2: false,
+        }, // Medium Processing Time Rig I
+        1968 => RigBonus {
+            me_pct: 0.0,
+            te_pct: 5.0,
+            cost_pct: 0.0,
+            is_t2: true,
+        }, // Medium Processing Time Rig II
+        1969 => RigBonus {
+            me_pct: 4.0,
+            te_pct: 0.0,
+            cost_pct: 0.0,
+            is_t2: false,
+        }, // Medium Processing Material Rig I
+        1970 => RigBonus {
+            me_pct: 5.0,
+            te_pct: 0.0,
+            cost_pct: 0.0,
+            is_t2: true,
+        }, // Medium Processing Material Rig II
+        1971 => RigBonus {
+            me_pct: 0.0,
+            te_pct: 0.0,
+            cost_pct: 3.0,
+            is_t2: false,
+        }, // Medium Processing Cost Rig I
+        1972 => RigBonus {
+            me_pct: 0.0,
+            te_pct: 0.0,
+            cost_pct: 4.0,
+            is_t2: true,
+        }, // Medium Processing Cost Rig II
+        // Small processing rigs (~50% of medium)
+        1973 => RigBonus {
+            me_pct: 0.0,
+            te_pct: 2.0,
+            cost_pct: 0.0,
+            is_t2: false,
+        }, // Small Processing Time Rig I
+        1974 => RigBonus {
+            me_pct: 0.0,
+            te_pct: 2.5,
+            cost_pct: 0.0,
+            is_t2: true,
+        }, // Small Processing Time Rig II
+        1975 => RigBonus {
+            me_pct: 2.0,
+            te_pct: 0.0,
+            cost_pct: 0.0,
+            is_t2: false,
+        }, // Small Processing Material Rig I
+        1976 => RigBonus {
+            me_pct: 2.5,
+            te_pct: 0.0,
+            cost_pct: 0.0,
+            is_t2: true,
+        }, // Small Processing Material Rig II
+        1977 => RigBonus {
+            me_pct: 0.0,
+            te_pct: 0.0,
+            cost_pct: 1.5,
+            is_t2: false,
+        }, // Small Processing Cost Rig I
+        1978 => RigBonus {
+            me_pct: 0.0,
+            te_pct: 0.0,
+            cost_pct: 2.0,
+            is_t2: true,
+        }, // Small Processing Cost Rig II
         _ => return None,
     };
     Some(b)
@@ -320,6 +393,23 @@ pub struct FacilityProfile {
     pub tax_rate: Option<f64>,
 }
 
+impl Default for FacilityProfile {
+    fn default() -> Self {
+        FacilityProfile {
+            facility_type: FacilityType::Manufacturing,
+            structure: StructureType::NpcStation,
+            security: SecurityTier::Highsec,
+            me_bonus: 1.0,
+            te_bonus_pct: 0.0,
+            cost_bonus: 0.0,
+            role_bonus_time: 0.0,
+            rig_type_ids: vec![],
+            system_cost_index: None,
+            tax_rate: None,
+        }
+    }
+}
+
 impl FacilityProfile {
     /// Whether this facility's results should be flagged approximate
     /// (true when system_cost_index or tax_rate is None).
@@ -376,25 +466,54 @@ impl FacilityProfile {
     }
 }
 
-/// A pair of facility profiles: one for manufacturing steps, one for reaction
-/// steps. Passed through the build-vs-buy tree so each `Activity::Manufacturing`
-/// node uses the manufacturing facility and each `Activity::Reaction` node uses
-/// the reaction facility.
+/// A triple of facility profiles: manufacturing, reaction, and components.
+/// Passed through the build-vs-buy tree so each `Activity::Manufacturing`
+/// node uses the manufacturing or components facility (depending on whether
+/// it's a top-level product or a sub-component) and each `Activity::Reaction`
+/// node uses the reaction facility.
+///
+/// `components` is always a manufacturing-type facility (NPC station or
+/// Upwell manufacturing structure) — it just has its own cost index, tax,
+/// and rig bonus set because components are often built at a different
+/// location than the final product.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct FacilityProfiles {
     pub manufacturing: FacilityProfile,
     pub reaction: FacilityProfile,
+    pub components: FacilityProfile,
+}
+
+impl Default for FacilityProfiles {
+    fn default() -> Self {
+        FacilityProfiles {
+            manufacturing: FacilityProfile::default(),
+            reaction: FacilityProfile::default(),
+            components: FacilityProfile::default(),
+        }
+    }
 }
 
 impl FacilityProfiles {
     /// Borrow the profile matching an activity. `Activity::Invention` uses the
     /// manufacturing facility (invention is a science job run at a manufacturing
     /// structure or NPC station).
+    /// When `is_component` is true, the `components` profile is used instead
+    /// of `manufacturing` — this lets the user specify a separate facility with
+    /// different rigs/cost index/tax for building components of T2/T3 products.
     pub fn for_activity(&self, activity: Activity) -> &FacilityProfile {
         match activity {
             Activity::Manufacturing | Activity::Invention => &self.manufacturing,
             Activity::Reaction => &self.reaction,
+        }
+    }
+
+    pub fn for_step(&self, step: &BuildStep) -> &FacilityProfile {
+        match step.activity {
+            Activity::Reaction => &self.reaction,
+            Activity::Manufacturing | Activity::Invention => {
+                if step.is_component { &self.components } else { &self.manufacturing }
+            }
         }
     }
 }
@@ -464,6 +583,10 @@ pub struct BuildStep {
     pub inputs: Vec<InputLine>,
     /// Set for T2 items: invention must succeed before manufacturing.
     pub invention: Option<Invention>,
+    /// Whether this build step is a component of a larger product (T2/T3 ship
+    /// components). When true, `FacilityProfiles::for_activity` selects the
+    /// `components` facility profile instead of `manufacturing`.
+    pub is_component: bool,
 }
 
 /// Tunables for a profit calculation. Defaults value everything at Jita sell-min
@@ -504,12 +627,50 @@ pub struct ProfitConfig {
     /// all job types — manufacturing, invention, copying, etc., not just
     /// manufacturing). 0.0 in the engine default; the command sets the real value.
     pub scc_surcharge: f64,
-    /// Optional facility profiles for manufacturing and reaction steps.
+        /// Optional facility profiles for manufacturing and reaction steps.
     /// When `Some`, each step selects its profile by `Activity` (via
     /// [`FacilityProfiles::for_activity`]); when `None`, the flat `me_bonus` /
     /// `cost_bonus` / `system_cost_index` / `facility_tax` fields are used as-is
     /// (backward compatibility with the old single-structure API).
     pub facility_profiles: Option<FacilityProfiles>,
+    /// Optional character implant(s) / facility module bonuses that apply on
+    /// top of the facility profile's bonuses (time, ME, cost).
+    pub implant: Option<ImplantBonus>,
+    /// Owned blueprint ME per type id (for per-blueprint ME override). Used
+    /// for sub-component ME when `build_components` is true.
+    #[serde(default)]
+    pub owned_me: HashMap<i64, i64>,
+    /// Owned blueprint TE per type id (for per-blueprint TE override). Used
+    /// for sub-component TE when `build_components` is true.
+    #[serde(default)]
+    pub owned_te: HashMap<i64, i64>,
+}
+
+/// Character implant or facility module bonus that applies on top of the
+/// facility profile's bonuses. EVE Online has several implants (e.g.
+/// Eifyr 'Guns' series) and facility modules that reduce manufacturing time
+/// and/or material costs — these are character/facility-level, not rig-level.
+///
+/// Bonuses are additive within their category and applied multiplicatively
+/// against the facility-derived totals:
+/// - `time_bonus_pct`: additional time reduction % (stacks with TE bonus).
+/// - `material_bonus`: additional ME multiplier (e.g. 0.99 = −1% materials,
+///   multiplicative with the facility ME bonus).
+/// - `cost_bonus_pct`: additional cost-index reduction % (additive with TE bonus).
+///
+/// `None` means no implant/module configured — equivalent to zero bonuses.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImplantBonus {
+    /// Additional manufacturing time reduction (percent, e.g. 4.0 = −4%).
+    /// Applied as a multiplier on top of the facility TE bonus.
+    pub time_bonus_pct: f64,
+    /// Additional material efficiency multiplier (e.g. 0.99 = −1%).
+    /// Applied multiplicatively with the facility ME bonus.
+    pub material_bonus: f64,
+    /// Additional job-fee cost reduction (percent, e.g. 2.0 = −2%).
+    /// Applied as an additional saving on the cost-index portion.
+    pub cost_bonus_pct: f64,
 }
 
 impl Default for ProfitConfig {
@@ -528,8 +689,11 @@ impl Default for ProfitConfig {
             cost_bonus: 0.0,
             structure_te_pct: 0.0,
             role_bonus_time: 0.0,
-            scc_surcharge: 0.0,
-            facility_profiles: None,
+                scc_surcharge: 0.0,
+                            facility_profiles: None,
+            implant: None,
+            owned_me: HashMap::new(),
+            owned_te: HashMap::new(),
         }
     }
 }
@@ -542,6 +706,23 @@ impl ProfitConfig {
             .as_ref()
             .map(|p| p.for_activity(activity).me_bonus)
             .unwrap_or(self.me_bonus)
+    }
+
+        /// ME bonus for a build step — uses the components profile when `step.is_component`
+    /// is true, otherwise the manufacturing/invention profile.
+    /// Includes implant material bonus: facility ME × implant material_bonus.
+    pub fn me_bonus_for_step(&self, step: &BuildStep) -> f64 {
+        let facility_me = self
+            .facility_profiles
+            .as_ref()
+            .map(|p| p.for_step(step).me_bonus)
+            .unwrap_or(self.me_bonus);
+        let implant_me = self
+            .implant
+            .as_ref()
+            .map(|i| i.material_bonus)
+            .unwrap_or(1.0);
+        facility_me * implant_me
     }
 
     /// Cost-index saving fraction for a build step (profile or flat fallback).
@@ -568,11 +749,15 @@ impl ProfitConfig {
             .unwrap_or(self.facility_tax)
     }
 
-    /// Whether any facility result is approximate (cost index or tax is None).
+        /// Whether any facility result is approximate (cost index or tax is None).
     pub fn is_approximate(&self) -> bool {
         self.facility_profiles
             .as_ref()
-            .map(|p| p.manufacturing.is_approximate() || p.reaction.is_approximate())
+            .map(|p| {
+                p.manufacturing.is_approximate()
+                    || p.reaction.is_approximate()
+                    || p.components.is_approximate()
+            })
             .unwrap_or(false)
     }
 
@@ -585,6 +770,17 @@ impl ProfitConfig {
             .unwrap_or(self.structure_te_pct)
     }
 
+        /// TE bonus percent for a build step, including implant time bonus.
+    /// Facility TE + implant time_bonus_pct (additive in percent).
+    pub fn te_bonus_pct_for_step(&self, step: &BuildStep) -> f64 {
+        let facility_te = self.facility_profiles
+            .as_ref()
+            .map(|p| p.for_step(step).te_bonus_pct)
+            .unwrap_or(self.structure_te_pct);
+        let implant_te = self.implant.as_ref().map(|i| i.time_bonus_pct).unwrap_or(0.0);
+        facility_te + implant_te
+    }
+
     /// Role-bonus time multiplier (0.25 for Tatara, 0 otherwise) for a step.
     /// Profile-aware; flat fallback is `role_bonus_time`.
     pub fn role_bonus_time_for(&self, activity: Activity) -> f64 {
@@ -593,15 +789,57 @@ impl ProfitConfig {
             .map(|p| p.for_activity(activity).role_bonus_time)
             .unwrap_or(self.role_bonus_time)
     }
+
+    /// Role-bonus time multiplier for a build step.
+    pub fn role_bonus_time_for_step(&self, step: &BuildStep) -> f64 {
+        self.facility_profiles
+            .as_ref()
+            .map(|p| p.for_step(step).role_bonus_time)
+            .unwrap_or(self.role_bonus_time)
+    }
+
+    /// System cost index for a build step (uses components profile when applicable).
+    pub fn system_cost_index_for_step(&self, step: &BuildStep) -> f64 {
+        self.facility_profiles
+            .as_ref()
+            .map(|p| p.for_step(step).cost_index_or_zero())
+            .unwrap_or(self.system_cost_index)
+    }
+
+    /// Facility tax rate for a build step (uses components profile when applicable).
+    pub fn facility_tax_for_step(&self, step: &BuildStep) -> f64 {
+        self.facility_profiles
+            .as_ref()
+            .map(|p| p.for_step(step).tax_or_zero())
+            .unwrap_or(self.facility_tax)
+    }
+
+        /// Cost-index saving fraction for a build step, including implant cost bonus.
+    /// Facility cost_bonus + implant cost_bonus_pct/100 (additive).
+    pub fn cost_bonus_for_step(&self, step: &BuildStep) -> f64 {
+                let facility_cost = self
+            .facility_profiles
+            .as_ref()
+            .map(|p| p.for_step(step).cost_bonus)
+            .unwrap_or(self.cost_bonus);
+        let implant_cost = self
+            .implant
+            .as_ref()
+            .map(|i| i.cost_bonus_pct / 100.0)
+            .unwrap_or(0.0);
+        facility_cost + implant_cost
+    }
 }
 
 /// EVE job install cost from EIV: system-cost-index (less structure/rig cost
 /// bonus) + facility tax + SCC surcharge, all on the estimated item value.
 /// Profile-aware: selects ME/cost-index/tax from the facility profile matching
-/// `activity`, or falls back to flat config fields when no profile is set.
-fn job_fee(eiv: f64, config: &ProfitConfig, activity: Activity) -> f64 {
-    eiv * config.system_cost_index_for(activity) * (1.0 - config.cost_bonus_for(activity))
-        + eiv * config.facility_tax_for(activity)
+/// the build step's activity (and components profile for component steps),
+/// or falls back to flat config fields when no profile is set.
+fn job_fee(eiv: f64, config: &ProfitConfig, step: &BuildStep) -> f64 {
+    eiv * config.system_cost_index_for_step(step)
+        * (1.0 - config.cost_bonus_for_step(step))
+        + eiv * config.facility_tax_for_step(step)
         + eiv * config.scc_surcharge
 }
 
@@ -656,9 +894,15 @@ fn build_unit_cost(
     config: &ProfitConfig,
     depth: u32,
 ) -> Option<f64> {
-    if depth == 0 || step.product_per_run <= 0 {
+        if depth == 0 || step.product_per_run <= 0 {
         return None;
     }
+    let component_me = config
+        .owned_me
+        .get(&step.product_type_id)
+        .copied()
+        .unwrap_or(0);
+    let me_bonus = config.me_bonus_for_step(step);
     let mut materials_total = 0.0;
     let mut eiv = 0.0;
     for input in &step.inputs {
@@ -675,11 +919,17 @@ fn build_unit_cost(
             }
             Sourcing::Buy => buy_unit?,
         };
-        // Sub-builds use base (ME 0) quantities — we don't know per-component ME.
-        materials_total += input.base_quantity as f64 * unit;
+        // Apply ME to material quantities: use owned_me for this blueprint type
+        // when available, falling back to the manual `me` value via required_quantity.
+        let qty = required_quantity(
+            input.base_quantity,
+            component_me,
+            me_bonus,
+        );
+        materials_total += qty as f64 * unit;
         eiv += eiv_unit_value(model) * input.base_quantity as f64;
     }
-    let job_fee = job_fee(eiv, config, step.activity);
+    let job_fee = job_fee(eiv, config, step);
     Some((materials_total + job_fee) / step.product_per_run as f64)
 }
 
@@ -703,7 +953,7 @@ fn sum_reaction_install_cost(
             .iter()
             .map(|m| eiv_unit_value(prices.get(&m.type_id)) * m.base_quantity as f64)
             .sum();
-        total += job_fee(eiv, config, Activity::Reaction);
+        total += job_fee(eiv, config, step);
     }
     for input in &step.inputs {
         if let Sourcing::Build(sub) = &input.sourcing {
@@ -796,7 +1046,7 @@ pub fn manufacturing_step(
     product: &BlueprintProduct,
     materials: &[BlueprintMaterial],
 ) -> BuildStep {
-    BuildStep {
+        BuildStep {
         activity: Activity::Manufacturing,
         blueprint_type_id,
         product_type_id: product.product_type_id,
@@ -812,6 +1062,7 @@ pub fn manufacturing_step(
             })
             .collect(),
         invention: None,
+        is_component: false,
     }
 }
 
@@ -884,7 +1135,7 @@ pub fn evaluate_with_stock(
             input.base_quantity,
             runs,
             effective_me,
-            config.me_bonus_for(step.activity),
+            config.me_bonus_for_step(step),
         );
         let buy_unit = price_for(model, config.material_basis);
         // Buildable inputs (a sub-recipe) take the cheaper of build vs buy.
@@ -928,7 +1179,7 @@ pub fn evaluate_with_stock(
         });
     }
 
-    let job_fee_amount = job_fee(eiv, config, step.activity);
+    let job_fee_amount = job_fee(eiv, config, step);
 
     // Revenue from selling the product.
     let units_produced = step.product_per_run * runs;
@@ -985,7 +1236,10 @@ pub fn evaluate_with_stock(
             // and copy jobs have their own per-activity cost indices in-game that
             // this engine doesn't fetch. Parameterize per-activity indices later
             // if/when they become available from ESI.
-            let invention_job_fee = job_fee(invention_eiv, config, Activity::Invention);
+                        let invention_job_fee = job_fee(invention_eiv, config, &BuildStep {
+                activity: Activity::Invention,
+                ..step.clone()
+            });
             // Copy job fee for the T1 BPC consumed each attempt: EIV of the T1
             // product run through job_fee(), same manufacturing-cost-index
             // approximation as invention_job_fee above.
@@ -994,7 +1248,10 @@ pub fn evaluate_with_stock(
                 .iter()
                 .map(|m| eiv_unit_value(prices.get(&m.type_id)) * m.base_quantity as f64)
                 .sum();
-            let copy_fee = job_fee(copy_eiv, config, Activity::Invention);
+                        let copy_fee = job_fee(copy_eiv, config, &BuildStep {
+                activity: Activity::Invention,
+                ..step.clone()
+            });
             let attempt_cost = datacore_cost + invention_job_fee + copy_fee;
             let probability = (inv.probability * config.invention_skill_multiplier).min(1.0);
             let yielded = probability * inv.runs_per_success as f64;
@@ -1052,7 +1309,7 @@ pub fn evaluate_with_stock(
         units_produced,
         material_cost,
         job_fee: job_fee_amount,
-        manufacturing_cost_index: config.system_cost_index_for(Activity::Manufacturing),
+                manufacturing_cost_index: config.system_cost_index_for(Activity::Manufacturing),
         manufacturing_install_cost: job_fee_amount,
         manufacturing_time_seconds: 0.0,
         reaction_install_cost: reaction_install,
@@ -1153,7 +1410,7 @@ mod tests {
         assert_eq!(required_quantity(1, 4, 0, 0.95), 4);
     }
 
-    #[test]
+        #[test]
     fn job_fee_adds_scc_and_cost_bonus() {
         let cfg = ProfitConfig {
             system_cost_index: 0.05,
@@ -1162,8 +1419,18 @@ mod tests {
             scc_surcharge: 0.04,
             ..Default::default()
         };
+        let step = BuildStep {
+            activity: Activity::Manufacturing,
+            blueprint_type_id: 0,
+            product_type_id: 0,
+            product_name: String::new(),
+            product_per_run: 1,
+            inputs: vec![],
+            invention: None,
+            is_component: false,
+        };
         // 1000 EIV: 1000×0.05×0.97 + 1000×0.01 + 1000×0.04 = 48.5 + 10 + 40 = 98.5.
-        assert!((job_fee(1000.0, &cfg, Activity::Manufacturing) - 98.5).abs() < 1e-9);
+        assert!((job_fee(1000.0, &cfg, &step) - 98.5).abs() < 1e-9);
     }
 
     #[test]
@@ -1193,11 +1460,12 @@ mod tests {
                 }],
                 runs_per_success: 1,
                 probability: 1.0,
-                result_me: 2,
-                base_blueprint_type_id: 599,
-            }),
-        };
-        let prices = HashMap::from([
+               result_me: 2,
+               base_blueprint_type_id: 599,
+           }),
+            is_component: false,
+       };
+       let prices = HashMap::from([
             (400, price(400, Some(55.0), Some(50.0), None)),
             (500, price(500, Some(22.0), Some(20.0), None)),
             (101, price(101, Some(1.0), Some(1.0), None)),
@@ -1292,10 +1560,11 @@ mod tests {
                 name: "B".into(),
                 base_quantity: 2,
                 sourcing: Sourcing::Buy,
-            }],
-            invention: None,
-        };
-        let step = BuildStep {
+               }],
+               invention: None,
+               is_component: false,
+           };
+           let step = BuildStep {
             activity: Activity::Manufacturing,
             blueprint_type_id: 1,
             product_type_id: 100,
@@ -1305,11 +1574,12 @@ mod tests {
                 type_id: 10,
                 name: "A".into(),
                 base_quantity: 1,
-                sourcing: Sourcing::Build(Box::new(sub)),
-            }],
-            invention: None,
-        };
-        let prices = HashMap::from([
+               sourcing: Sourcing::Build(Box::new(sub)),
+           }],
+           invention: None,
+            is_component: false,
+       };
+       let prices = HashMap::from([
             (10, price(10, Some(100.0), Some(100.0), None)),
             (20, price(20, Some(10.0), Some(10.0), None)),
             (100, price(100, Some(1000.0), Some(900.0), None)),
@@ -1467,15 +1737,16 @@ mod tests {
                 Some(0.05),
                 Some(0.0),
             ),
-            reaction: FacilityProfile::from_structure(
-                FacilityType::Reaction,
-                StructureType::Tatara,
-                SecurityTier::Nullsec,
-                vec![],
-                Some(0.08),
-                Some(0.1),
-            ),
-        };
+           reaction: FacilityProfile::from_structure(
+               FacilityType::Reaction,
+               StructureType::Tatara,
+               SecurityTier::Nullsec,
+               vec![],
+               Some(0.08),
+               Some(0.1),
+           ),
+           components: FacilityProfile::default(),
+       };
         assert_eq!(
             profiles.for_activity(Activity::Manufacturing).structure,
             StructureType::Raitaru,
@@ -1497,19 +1768,20 @@ mod tests {
                 Some(0.05),
                 Some(0.0),
             ),
-            reaction: FacilityProfile::from_structure(
-                FacilityType::Reaction,
-                StructureType::Tatara,
-                SecurityTier::Nullsec,
-                vec![],
-                Some(0.08),
-                Some(0.1),
-            ),
-        };
-        let config = ProfitConfig {
-            facility_profiles: Some(profiles),
-            ..Default::default()
-        };
+           reaction: FacilityProfile::from_structure(
+               FacilityType::Reaction,
+               StructureType::Tatara,
+               SecurityTier::Nullsec,
+               vec![],
+               Some(0.08),
+               Some(0.1),
+           ),
+           components: FacilityProfile::default(),
+       };
+       let config = ProfitConfig {
+           facility_profiles: Some(profiles),
+           ..Default::default()
+       };
         approx(config.me_bonus_for(Activity::Manufacturing), 0.99);
         approx(config.te_bonus_pct_for(Activity::Manufacturing), 15.0);
         approx(config.role_bonus_time_for(Activity::Reaction), 0.25);
@@ -1534,24 +1806,45 @@ mod tests {
                 Some(0.05),
                 Some(0.0),
             ),
-            reaction: FacilityProfile::from_structure(
-                FacilityType::Reaction,
-                StructureType::Tatara,
-                SecurityTier::Nullsec,
-                vec![],
-                Some(0.08),
-                Some(0.1),
-            ),
-        };
-        let config = ProfitConfig {
-            facility_profiles: Some(profiles),
+           reaction: FacilityProfile::from_structure(
+               FacilityType::Reaction,
+               StructureType::Tatara,
+               SecurityTier::Nullsec,
+               vec![],
+               Some(0.08),
+               Some(0.1),
+           ),
+           components: FacilityProfile::default(),
+       };
+       let config = ProfitConfig {
+           facility_profiles: Some(profiles),
             scc_surcharge: 0.04,
             ..Default::default()
         };
-        let mfg_fee = job_fee(1000.0, &config, Activity::Manufacturing);
+                        let mfg_step = BuildStep {
+            activity: Activity::Manufacturing,
+            blueprint_type_id: 0,
+            product_type_id: 0,
+            product_name: String::new(),
+            product_per_run: 1,
+            inputs: vec![],
+            invention: None,
+            is_component: false,
+        };
+        let mfg_fee = job_fee(1000.0, &config, &mfg_step);
         // 1000×0.05×(1−0.03) + 0 + 1000×0.04 = 48.5 + 40 = 88.5
         approx(mfg_fee, 88.5);
-        let rxn_fee = job_fee(1000.0, &config, Activity::Reaction);
+        let rxn_step = BuildStep {
+            activity: Activity::Reaction,
+            blueprint_type_id: 0,
+            product_type_id: 0,
+            product_name: String::new(),
+            product_per_run: 1,
+            inputs: vec![],
+            invention: None,
+            is_component: false,
+        };
+        let rxn_fee = job_fee(1000.0, &config, &rxn_step);
         approx(rxn_fee, 216.0);
     }
 
@@ -1567,11 +1860,12 @@ mod tests {
                 type_id: 200,
                 name: "Tritanium".into(),
                 base_quantity: 10,
-                sourcing: Sourcing::Buy,
-            }],
-            invention: None,
-        };
-        let step = BuildStep {
+               sourcing: Sourcing::Buy,
+           }],
+           invention: None,
+            is_component: false,
+       };
+       let step = BuildStep {
             activity: Activity::Manufacturing,
             blueprint_type_id: 999,
             product_type_id: 100,
@@ -1581,11 +1875,12 @@ mod tests {
                 type_id: 600,
                 name: "Booster".into(),
                 base_quantity: 2,
-                sourcing: Sourcing::Build(Box::new(rxn_sub)),
-            }],
-            invention: None,
-        };
-        let config = ProfitConfig {
+               sourcing: Sourcing::Build(Box::new(rxn_sub)),
+           }],
+           invention: None,
+            is_component: false,
+       };
+       let config = ProfitConfig {
             system_cost_index: 0.05,
             facility_tax: 0.01,
             cost_bonus: 0.03,
@@ -1594,6 +1889,140 @@ mod tests {
         };
         // EIV = 10 × 4 = 40; fee = 40×0.05×0.97 + 40×0.01 + 40×0.04 = 3.94
         let rc = sum_reaction_install_cost(&step, &widget_prices(), &config, MAX_BUILD_DEPTH);
-        approx(rc, 3.94);
+                approx(rc, 3.94);
+    }
+
+    #[test]
+    fn processing_rigs_are_recognized() {
+        // Medium Processing Time Rig I (1967) → 4% TE
+        let b = rig_bonus_lookup(1967).expect("should find rig 1967");
+        assert_eq!(b.te_pct, 4.0);
+        assert!(!b.is_t2);
+
+        // Medium Processing Material Rig II (1970) → 5% ME, T2
+        let b = rig_bonus_lookup(1970).expect("should find rig 1970");
+        assert_eq!(b.me_pct, 5.0);
+        assert!(b.is_t2);
+
+        // Medium Processing Cost Rig I (1971) → 3% cost
+        let b = rig_bonus_lookup(1971).expect("should find rig 1971");
+        assert_eq!(b.cost_pct, 3.0);
+
+        // Small Processing Time Rig I (1973) → 2% TE
+        let b = rig_bonus_lookup(1973).expect("should find rig 1973");
+        assert_eq!(b.te_pct, 2.0);
+
+        // Unknown ID
+        assert!(rig_bonus_lookup(99999).is_none());
+    }
+
+    #[test]
+    fn rig_bonuses_from_ids_sums_processing_rigs() {
+        // 1967 (4% TE) + 1969 (4% ME) + 1971 (3% cost) at Highsec
+        let (me, te, cost) = rig_bonuses_from_ids(
+            &[1967, 1969, 1971],
+            SecurityTier::Highsec,
+        );
+        approx(te, 4.0); // 4% TE
+        approx(me, 0.96); // 1 - 4% ME
+        approx(cost, 0.03); // 3% cost
+    }
+
+    #[test]
+    fn t2_processing_rig_scaled_by_security() {
+        // Medium Processing Time Rig II (1968): 5% TE at full security
+        let (_, te_null, _) = rig_bonuses_from_ids(&[1968], SecurityTier::Nullsec);
+        approx(te_null, 5.0); // 100% multiplier
+
+        let (_, te_high, _) = rig_bonuses_from_ids(&[1968], SecurityTier::Highsec);
+        approx(te_high, 2.5); // 50% multiplier → 2.5%
+
+        let (_, te_wh, _) = rig_bonuses_from_ids(&[1968], SecurityTier::Wormhole);
+        approx(te_wh, 7.5); // 150% multiplier → 7.5%
+    }
+
+    #[test]
+    fn implant_bonuses_stack_on_facility() {
+        let profiles = FacilityProfiles {
+            manufacturing: FacilityProfile::from_structure(
+                FacilityType::Manufacturing,
+                StructureType::Raitaru,
+                SecurityTier::Highsec,
+                vec![],
+                Some(0.05),
+                Some(0.0),
+            ),
+            reaction: FacilityProfile::default(),
+            components: FacilityProfile::default(),
+        };
+        let step = BuildStep {
+            activity: Activity::Manufacturing,
+            blueprint_type_id: 0,
+            product_type_id: 0,
+            product_name: String::new(),
+            product_per_run: 1,
+            inputs: vec![],
+            invention: None,
+            is_component: false,
+        };
+
+        // No implant → Raitaru base: 15% TE
+        let config = ProfitConfig {
+            facility_profiles: Some(profiles.clone()),
+            ..Default::default()
+        };
+        approx(config.te_bonus_pct_for_step(&step), 15.0);
+
+        // With implant (4% time) → 15 + 4 = 19% TE
+        let config = ProfitConfig {
+            facility_profiles: Some(profiles),
+            implant: Some(ImplantBonus {
+                time_bonus_pct: 4.0,
+                material_bonus: 1.0,
+                cost_bonus_pct: 0.0,
+            }),
+            ..Default::default()
+        };
+        approx(config.te_bonus_pct_for_step(&step), 19.0);
+    }
+
+    #[test]
+    fn implant_material_bonus_multiplies_facility_me() {
+        let profiles = FacilityProfiles {
+            manufacturing: FacilityProfile::from_structure(
+                FacilityType::Manufacturing,
+                StructureType::Raitaru,
+                SecurityTier::Highsec,
+                vec![1955], // 2% ME rig
+                Some(0.05),
+                Some(0.0),
+            ),
+            reaction: FacilityProfile::default(),
+            components: FacilityProfile::default(),
+        };
+        let step = BuildStep {
+            activity: Activity::Manufacturing,
+            blueprint_type_id: 0,
+            product_type_id: 0,
+            product_name: String::new(),
+            product_per_run: 1,
+            inputs: vec![],
+            invention: None,
+            is_component: false,
+        };
+
+        // Raitaru (0.99) + rig 1955 (2% ME) + T1 @ Highsec (1.0) = 0.99 * 0.98 = 0.9702
+        // Then implant material_bonus 0.99 → 0.9702 * 0.99 = 0.960498
+        let config = ProfitConfig {
+            facility_profiles: Some(profiles),
+            implant: Some(ImplantBonus {
+                time_bonus_pct: 0.0,
+                material_bonus: 0.99,
+                cost_bonus_pct: 0.0,
+            }),
+            ..Default::default()
+        };
+        let r = config.me_bonus_for_step(&step);
+                approx(r, 0.9702 * 0.99);
     }
 }

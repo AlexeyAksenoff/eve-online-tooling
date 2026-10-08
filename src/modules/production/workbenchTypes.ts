@@ -1,6 +1,7 @@
 import type { UseMutationResult, UseQueryResult } from "@tanstack/react-query";
 import type {
   Decryptor,
+  ImplantBonus,
   ListItem,
   ListName,
   OwnedBlueprint,
@@ -68,17 +69,19 @@ export interface WorkbenchState {
   setBlueprintCostPerRun: (n: number) => void;
   inventionSkill: number;
   setInventionSkill: (n: number) => void;
-  decryptorTypeId: number | null;
+    decryptorTypeId: number | null;
   setDecryptorTypeId: (id: number | null) => void;
+  implant: ImplantBonus | null;
+  setImplant: (b: ImplantBonus | null) => void;
 
   // Facility profiles: two slots (Manufacturing + Reaction) with separate
   // structure/security/rig bonuses. Threaded through ProfitParams to the
   // Rust engine so each build step is costed against the right facility.
   facilityProfiles: FacilityProfiles;
   setFacilityProfiles: (p: FacilityProfiles) => void;
-  /** Which profile slot is currently being edited in the UI. */
-  selectedProfile: "manufacturing" | "reaction";
-  setSelectedProfile: (s: "manufacturing" | "reaction") => void;
+    /** Which profile slot is currently being edited in the UI. */
+  selectedProfile: "manufacturing" | "reaction" | "components";
+  setSelectedProfile: (s: "manufacturing" | "reaction" | "components") => void;
 
   name: string;
   setName: (s: string) => void;

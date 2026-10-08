@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   composeFacilityProfile,
   defaultFacilityProfiles,
+  defaultComponentsProfile,
   exportFacilityProfiles,
   importFacilityProfiles,
   isApproximate,
@@ -82,13 +83,24 @@ describe("defaultFacilityProfiles", () => {
     const profiles = defaultFacilityProfiles();
     expect(profiles.manufacturing.structure).toBe("npcStation");
     expect(profiles.reaction.structure).toBe("npcStation");
+    expect(profiles.components.structure).toBe("npcStation");
     expect(profiles.manufacturing.meBonus).toBe(1.0);
     expect(profiles.manufacturing.systemCostIndex).toBe(null);
   });
 });
 
+describe("defaultComponentsProfile", () => {
+  it("returns NPC station profile with components facility type", () => {
+    const p = defaultComponentsProfile();
+    expect(p.facilityType).toBe("components");
+    expect(p.structure).toBe("npcStation");
+    expect(p.meBonus).toBe(1.0);
+    expect(p.rigTypeIds).toEqual([]);
+  });
+});
+
 describe("isApproximate", () => {
-  it("returns false when both profiles have cost index and tax", () => {
+  it("returns false when all profiles have cost index and tax", () => {
     const profiles = defaultFacilityProfiles();
     const ok = {
       ...profiles,
@@ -102,8 +114,18 @@ describe("isApproximate", () => {
         systemCostIndex: 0.08,
         taxRate: 0.05,
       },
+      components: {
+        ...profiles.components,
+        systemCostIndex: 0.05,
+        taxRate: 0,
+      },
     };
     expect(isApproximate(ok)).toBe(false);
+  });
+
+  it("returns true when components profile is approximate", () => {
+    const profiles = defaultFacilityProfiles();
+    expect(isApproximate(profiles)).toBe(true);
   });
 });
 
@@ -134,7 +156,7 @@ describe("facilityProfileLabel", () => {
 });
 
 describe("JSON export/import round-trip", () => {
-  it("exports and re-imports a profile pair", () => {
+    it("exports and re-imports a profile triple", () => {
     const original = defaultFacilityProfiles();
     const json = exportFacilityProfiles(original);
     const restored = importFacilityProfiles(json);
@@ -142,6 +164,7 @@ describe("JSON export/import round-trip", () => {
       original.manufacturing.structure,
     );
     expect(restored.reaction.structure).toBe(original.reaction.structure);
+    expect(restored.components.structure).toBe(original.components.structure);
     expect(restored.manufacturing.meBonus).toBeCloseTo(
       original.manufacturing.meBonus,
       10,

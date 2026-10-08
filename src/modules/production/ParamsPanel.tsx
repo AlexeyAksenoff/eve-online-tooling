@@ -24,8 +24,10 @@ import {
 import { toggle } from "../../lib/sets";
 import {
   productionManufacturingRigs,
+  productionProcessingRigs,
   type RigTypeInfo,
 } from "../../lib/api/production";
+import { type FacilityType } from "./types";
 import type { WorkbenchState } from "./workbenchTypes";
 
 export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
@@ -85,8 +87,10 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
     setBlueprintCostPerRun,
     inventionSkill,
     setInventionSkill,
-    decryptorTypeId,
+        decryptorTypeId,
     setDecryptorTypeId,
+    implant,
+    setImplant,
     decryptors,
     minRoiPct,
     setMinRoiPct,
@@ -474,9 +478,12 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
     });
   };
 
-  const structureOptions = Object.entries(FACILITY_STRUCTURES).filter(
-    ([, s]) => s.facilityType === selectedProfile,
-  );
+    const structureOptions = Object.entries(FACILITY_STRUCTURES).filter(([, s]) => {
+    // "components" uses the same structures as "manufacturing" — they just get
+    // a separate facility profile (cost index, rigs, tax).
+    if (selectedProfile === "components") return s.facilityType === "manufacturing";
+    return s.facilityType === selectedProfile;
+  });
 
   return (
     <div className="space-y-3">
@@ -501,6 +508,16 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
           }`}
         >
           Reaction
+        </button>
+        <button
+          onClick={() => setSelectedProfile("components")}
+          className={`rounded px-3 py-1.5 text-sm ${
+            selectedProfile === "components"
+              ? "bg-zinc-700 text-zinc-100"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          Components
         </button>
       </div>
 
@@ -551,6 +568,7 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
       {/* Rig selector — checkboxes from SDE-backed rig type list */}
       <Field label="Rig modules">
         <RigSelector
+          facilityType={profile.facilityType}
           selectedIds={profile.rigTypeIds ?? []}
           onChange={(newIds) => {
             void update({ rigTypeIds: newIds });
@@ -593,6 +611,73 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
         />
       </Field>
 
+                   {/* Implant/module bonuses */}
+      <Field label="Implant / module bonuses">
+        <div className="space-y-2 text-sm">
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="block text-xs text-zinc-400">Time −%</label>
+              <Num
+                value={implant?.time_bonus_pct ?? 0}
+                step={0.1}
+                min={0}
+                max={100}
+                onChange={(v) =>
+                  setImplant(
+                    implant
+                      ? { ...implant, time_bonus_pct: v }
+                      : { time_bonus_pct: v, material_bonus: 1.0, cost_bonus_pct: 0 },
+                  )
+                }
+                placeholder="e.g. 4 (Eifyr 'Guns')"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-zinc-400">ME −%</label>
+              <Num
+                value={(1 - (implant?.material_bonus ?? 1)) * 100}
+                step={0.1}
+                min={0}
+                max={100}
+                onChange={(v) =>
+                  setImplant(
+                    implant
+                      ? { ...implant, material_bonus: 1 - v / 100 }
+                      : { time_bonus_pct: 0, material_bonus: 1 - v / 100, cost_bonus_pct: 0 },
+                  )
+                }
+                placeholder="e.g. 1"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-zinc-400">Cost −%</label>
+              <Num
+                value={implant?.cost_bonus_pct ?? 0}
+                step={0.1}
+                min={0}
+                max={100}
+                onChange={(v) =>
+                  setImplant(
+                    implant
+                      ? { ...implant, cost_bonus_pct: v }
+                      : { time_bonus_pct: 0, material_bonus: 1.0, cost_bonus_pct: v },
+                  )
+                }
+                placeholder="e.g. 2"
+              />
+            </div>
+          </div>
+          {implant && (
+            <button
+              onClick={() => setImplant(null)}
+              className="text-xs text-zinc-400 hover:text-zinc-200 underline"
+            >
+              Clear implant bonuses
+            </button>
+          )}
+        </div>
+      </Field>
+
       {/* JSON import / export */}
       <div className="flex gap-2 pt-2 border-t border-zinc-800">
         <button
@@ -623,26 +708,33 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
               e.target.value = "";
             }}
           />
-        </label>
+                          </label>
+        </div>
       </div>
     </div>
   );
 }
 
-/** Checkbox list of manufacturing rig types, grouped by category (ME / TE /
- *  Cost). Fetched via `productionManufacturingRigs()` (backend has the
- *  rig bonus lookup table). When a rig is toggled, `onChange` fires with
+/** Checkbox list of rig types, grouped by category (ME / TE / Cost).
+ *  Fetched from the backend: `productionManufacturingRigs` for
+ *  manufacturing/components facilities, `productionProcessingRigs` for
+ *  reaction facilities. When a rig is toggled, `onChange` fires with
  *  the updated `typeId[]` list. */
 function RigSelector({
+  facilityType,
   selectedIds,
   onChange,
 }: {
+  facilityType: FacilityType;
   selectedIds: number[];
   onChange: (ids: number[]) => void;
 }) {
   const { data: rigs } = useQuery({
-    queryKey: ["production", "manufacturing-rigs"],
-    queryFn: productionManufacturingRigs,
+    queryKey: ["production", `${facilityType}-rigs`],
+    queryFn:
+      facilityType === "reaction"
+        ? productionProcessingRigs
+        : productionManufacturingRigs,
     staleTime: Infinity,
   });
 

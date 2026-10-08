@@ -74,7 +74,7 @@ fn resolve_input(
                 } else {
                     Activity::Manufacturing
                 };
-                Sourcing::Build(Box::new(BuildStep {
+                                Sourcing::Build(Box::new(BuildStep {
                     activity,
                     blueprint_type_id: recipe.blueprint_type_id,
                     product_type_id: type_id,
@@ -82,6 +82,7 @@ fn resolve_input(
                     product_per_run: recipe.product_quantity,
                     inputs,
                     invention: None,
+                    is_component: true,  // All sub-builds in resolve_input are components
                 }))
             }
             None => Sourcing::Buy,
@@ -193,6 +194,9 @@ pub struct ProfitParams {
     #[serde(default = "default_ignore_side_products")]
     #[allow(dead_code)]
     pub ignore_side_products: bool,
+    /// Optional character implant/facility module bonuses (time, ME, cost).
+    /// When `Some`, applied on top of the facility profile's bonuses.
+    pub implant: Option<super::engine::ImplantBonus>,
 }
 
 fn default_build_components() -> bool {
@@ -375,7 +379,10 @@ pub async fn production_profit(
         include_sales_cost: params.include_sales_cost,
         sales_tax: params.sales_tax,
         broker_fee: params.broker_fee,
-        facility_profiles: params.facility_profiles.clone(),
+                                facility_profiles: params.facility_profiles.clone(),
+        implant: params.implant.clone(),
+        owned_me: params.owned_me.clone(),
+        owned_te: params.owned_te.clone(),
     };
 
     let meta = crate::sde::cached_meta_group_names(&dir)?;
@@ -399,8 +406,9 @@ pub async fn production_profit(
     // Industry (−3%/lvl) × structure TE bonus.
     let l = params.time_skill.clamp(0, 5) as f64;
     let time_skill_mult = (1.0 - 0.04 * l) * (1.0 - 0.03 * l);
-    // Profile-aware TE bonus: from the facility profile if configured, else
-    // the flat `structure_te_pct` (backward compat).
+        // Profile-aware TE bonus: from the facility profile if configured, else
+    // the flat `structure_te_pct` (backward compat). Uses the manufacturing
+    // profile (top-level product is never a component).
     let mfg_te_bonus_pct = config.te_bonus_pct_for(super::engine::Activity::Manufacturing);
     let mfg_te_mult = 1.0 - mfg_te_bonus_pct / 100.0;
 
@@ -426,8 +434,8 @@ pub async fn production_profit(
                     .get(&step.blueprint_type_id)
                     .copied()
                     .unwrap_or(params.te);
-                let te_bonus = config.te_bonus_pct_for(super::engine::Activity::Reaction);
-                let role_bonus = config.role_bonus_time_for(super::engine::Activity::Reaction);
+                                let te_bonus = config.te_bonus_pct_for_step(step);
+                                let role_bonus = config.role_bonus_time_for_step(step);
                 // Reaction time = base × runs × (1 − blueprint_TE) × (1 − facility_TE) × (1 − role_bonus)
                 total += base as f64
                     * runs as f64
@@ -649,6 +657,42 @@ pub fn production_manufacturing_rigs() -> Vec<RigTypeInfo> {
                 bonus,
             })
         })
+            .collect()
+}
+
+/// All known processing (reaction) rig types (for the UI checkbox list on the
+/// Facilities → Reaction tab). Same well-known constants as manufacturing rigs,
+/// just the processing rig type IDs (1967-1978).
+#[tauri::command]
+#[specta::specta]
+pub fn production_processing_rigs() -> Vec<RigTypeInfo> {
+    use super::engine::{rig_bonus_lookup, RigBonus};
+    let ids = [
+        1967, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1975, 1976, 1977, 1978,
+    ];
+    ids.iter()
+        .filter_map(|&id| {
+            let RigBonus {
+                me_pct,
+                te_pct,
+                cost_pct,
+                is_t2,
+            } = rig_bonus_lookup(id)?;
+            let (category, bonus) = if me_pct > 0.0 {
+                ("me", me_pct)
+            } else if te_pct > 0.0 {
+                ("te", te_pct)
+            } else {
+                ("cost", cost_pct)
+            };
+            Some(RigTypeInfo {
+                type_id: id,
+                name: rig_type_name(id),
+                category: category.to_string(),
+                tier: if is_t2 { "T2" } else { "T1" }.to_string(),
+                bonus,
+            })
+        })
         .collect()
 }
 
@@ -667,7 +711,20 @@ fn rig_type_name(id: i64) -> String {
         1963 => "Small Manufacturing Material Rig I",
         1964 => "Small Manufacturing Material Rig II",
         1965 => "Small Manufacturing Cost Rig I",
-        1966 => "Small Manufacturing Cost Rig II",
+                1966 => "Small Manufacturing Cost Rig II",
+        // Processing/Reaction rigs
+        1967 => "Medium Processing Time Rig I",
+        1968 => "Medium Processing Time Rig II",
+        1969 => "Medium Processing Material Rig I",
+        1970 => "Medium Processing Material Rig II",
+        1971 => "Medium Processing Cost Rig I",
+        1972 => "Medium Processing Cost Rig II",
+        1973 => "Small Processing Time Rig I",
+        1974 => "Small Processing Time Rig II",
+        1975 => "Small Processing Material Rig I",
+        1976 => "Small Processing Material Rig II",
+        1977 => "Small Processing Cost Rig I",
+        1978 => "Small Processing Cost Rig II",
         _ => "Unknown rig",
     }
     .to_string()
@@ -761,7 +818,8 @@ pub fn specta_commands() -> tauri_specta::Commands<tauri::Wry> {
         production_get_list,
         production_set_list,
         production_system_cost_index,
-        production_manufacturing_rigs,
+                production_manufacturing_rigs,
+        production_processing_rigs,
         production_rig_bonuses,
     ]
 }
