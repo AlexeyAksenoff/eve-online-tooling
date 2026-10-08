@@ -70,6 +70,8 @@ const cost = (
   productPrice: null,
   materials: [],
   missingPrices: [],
+  reactions: { lines: [], totalInstallCost: 0 },
+  excessRevenue: 0,
 });
 
 const COSTS: ProfitBreakdown[] = [cost(100, 1000), cost(200, 1000)];

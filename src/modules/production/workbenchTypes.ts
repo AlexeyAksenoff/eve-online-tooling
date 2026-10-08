@@ -50,6 +50,8 @@ export interface WorkbenchState {
   setUseStock: (b: boolean) => void;
   buildComponents: boolean;
   setBuildComponents: (b: boolean) => void;
+  ignoreBuildFuelBlocks: boolean;
+  setIgnoreBuildFuelBlocks: (b: boolean) => void;
   te: number;
   setTe: (n: number) => void;
   /** Fallback ME (0..10) for component build steps (is_component) when not owned. */

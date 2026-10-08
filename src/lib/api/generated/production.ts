@@ -95,6 +95,26 @@ export const commands = {
     }
   },
   /**
+   * The raw SDE solar-system security (−1.0 … +1.0) for the system an NPC
+   * station sits in, resolved via `staStations → mapSolarSystems`. `None` when
+   * the station isn't in `staStations` (e.g. an Upwell structure) or the
+   * system is unknown — the caller falls back to region-based detection for
+   * WH space.
+   */
+  async productionStationSecurity(
+    stationId: number,
+  ): Promise<Result<number | null, AppError>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("production_station_security", { stationId }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as AppError };
+    }
+  },
+  /**
    * All industry rigs for one facility type, readable right now. Rigs are
    * filtered to those whose slot size exactly matches `max_rig_size` (the size
    * of the slot the chosen structure exposes — a rig only fits a slot of its
@@ -361,6 +381,14 @@ export type MaterialLine = {
    * True when building this input is cheaper than buying it.
    */
   built: boolean;
+  /**
+   * Excess units produced by a build sub-step when
+   * `sub.product_per_run × runs_needed` exceeds the required quantity
+   * (partial-run over-production — e.g. a 10-run BPC producing 1 unit
+   * when only 3 are needed yields 7 excess). 0 for bought inputs or
+   * when there is no over-production.
+   */
+  excessQuantity?: number;
 };
 /**
  * Which price vector to value a role (materials or product) with. Defaults use
@@ -440,6 +468,13 @@ export type ProfitBreakdown = {
   roi: number | null;
   profitPerUnit: number;
   /**
+   * Revenue from selling excess (over-produced) buildable components —
+   * `excess_quantity × product-basis price`, with sales tax/broker fee
+   * applied when `include_sales_cost`. Added to net profit. 0 when
+   * nothing is built or nothing is over-produced.
+   */
+  excessRevenue: number;
+  /**
    * Meta group of the product (Tech I/II, Faction, Officer, …). Filled by the
    * command layer from the SDE; the pure engine leaves it `None`.
    */
@@ -480,6 +515,12 @@ export type ProfitBreakdown = {
    * Type ids we could not price; the row's numbers are incomplete when set.
    */
   missingPrices: number[];
+  /**
+   * Reaction starts needed to build this product's T3/reacted components
+   * (empty when no reactions are in the tree). Always present — an empty
+   * plan when the build tree has no reactions.
+   */
+  reactions: ReactionPlan;
 };
 /**
  * Parameters for the production ranking. Everything here affects pricing/cost,
@@ -606,7 +647,48 @@ export type ProfitParams = {
    * for all components. Ignored for the top-level product. 0 = no bonus.
    */
   componentTe?: number;
+  /**
+   * Inventory group IDs whose materials are always bought (never built),
+   * even when `build_components` is on — matches EVE-IPH's
+   * `AlwaysBuyFuelBlocks`/`AlwaysBuyRAMs`: 1136 = Fuel Blocks, 332 = R.A.M.-ы.
+   * Empty = build normally (no forced buy).
+   */
+  ignoreBuildGroups?: number[];
 };
+/**
+ * One reagent within a [`ReactionLine`]: quantity needed across all reaction
+ * runs + its cost. Reaction materials have **no ME** in EVE (ME only applies
+ * to manufacturing), so `required = base_quantity × runs`.
+ */
+export type ReactionInputLine = {
+  typeId: number;
+  name: string;
+  requiredQuantity: number;
+  /**
+   * Unit price used (material basis), for the UI's per-line cost.
+   */
+  unitPrice: number | null;
+  lineCost: number;
+};
+/**
+ * A single reaction start in the plan: which formula, how many runs, and its
+ * full reagent requirement.
+ */
+export type ReactionLine = {
+  blueprintTypeId: number;
+  productTypeId: number;
+  productName: string;
+  productPerRun: number;
+  runs: number;
+  inputs: ReactionInputLine[];
+};
+/**
+ * Full reaction plan extracted from a build tree — every Reaction sub-step
+ * (composite / molecular / polymer / biochemical formulas), how many times it
+ * must run, and its reagents. `total_install_cost` is the summed job fee
+ * already captured in [`ProfitBreakdown::reaction_install_cost`].
+ */
+export type ReactionPlan = { lines: ReactionLine[]; totalInstallCost: number };
 /**
  * A known manufacturing rig type with its bonus description.
  * A rig type surfaced to the Facilities rig selector.

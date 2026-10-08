@@ -868,6 +868,51 @@ pub struct MaterialLine {
     pub line_cost: f64,
     /// True when building this input is cheaper than buying it.
     pub built: bool,
+    /// Excess units produced by a build sub-step when
+    /// `sub.product_per_run × runs_needed` exceeds the required quantity
+    /// (partial-run over-production — e.g. a 10-run BPC producing 1 unit
+    /// when only 3 are needed yields 7 excess). 0 for bought inputs or
+    /// when there is no over-production.
+    #[serde(default)]
+    pub excess_quantity: i64,
+}
+
+/// One reagent within a [`ReactionLine`]: quantity needed across all reaction
+/// runs + its cost. Reaction materials have **no ME** in EVE (ME only applies
+/// to manufacturing), so `required = base_quantity × runs`.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactionInputLine {
+    pub type_id: i64,
+    pub name: String,
+    pub required_quantity: i64,
+    /// Unit price used (material basis), for the UI's per-line cost.
+    pub unit_price: Option<f64>,
+    pub line_cost: f64,
+}
+
+/// A single reaction start in the plan: which formula, how many runs, and its
+/// full reagent requirement.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactionLine {
+    pub blueprint_type_id: i64,
+    pub product_type_id: i64,
+    pub product_name: String,
+    pub product_per_run: i64,
+    pub runs: i64,
+    pub inputs: Vec<ReactionInputLine>,
+}
+
+/// Full reaction plan extracted from a build tree — every Reaction sub-step
+/// (composite / molecular / polymer / biochemical formulas), how many times it
+/// must run, and its reagents. `total_install_cost` is the summed job fee
+/// already captured in [`ProfitBreakdown::reaction_install_cost`].
+#[derive(Debug, Clone, Default, Serialize, PartialEq, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactionPlan {
+    pub lines: Vec<ReactionLine>,
+    pub total_install_cost: f64,
 }
 
 /// Invention cost detail for the drill-down (T2 items).
@@ -958,6 +1003,11 @@ fn build_unit_cost(
 /// a build tree. Used to populate `reaction_install_cost` in `ProfitBreakdown`.
 /// Each Reaction node's EIV is computed from its base-quantity inputs at
 /// adjusted price, then passed through the profile-aware [`job_fee`].
+///
+/// Test-only now that [`collect_reactions`] does the full walk (this helper is
+/// kept for the `sum_reaction_install_cost_sums_sub_build_reaction_fees` test).
+#[cfg(test)]
+#[allow(dead_code)]
 fn sum_reaction_install_cost(
     step: &BuildStep,
     prices: &HashMap<i64, PriceModel>,
@@ -982,6 +1032,74 @@ fn sum_reaction_install_cost(
         }
     }
     total
+}
+
+/// Recursively walk a build tree and collect every Reaction sub-step into
+/// `collected`, calculating how many runs each needs from the top-level `needed`
+/// (units of the root product). Reaction materials have no ME in EVE, so
+/// `required = base_quantity × runs`. Returns the total install cost (job fees)
+/// for the collected reactions. Profile-aware (each Reaction step selects the
+/// reaction facility profile via `config`).
+fn collect_reactions(
+    step: &BuildStep,
+    config: &ProfitConfig,
+    prices: &HashMap<i64, PriceModel>,
+    needed: i64,
+    depth: u32,
+    collected: &mut Vec<ReactionLine>,
+) -> f64 {
+    if depth == 0 {
+        return 0.0;
+    }
+    let mut install_cost = 0.0;
+    if step.activity == Activity::Reaction && step.product_per_run > 0 {
+        let runs = ceil_div(needed, step.product_per_run);
+        let mut inputs = Vec::with_capacity(step.inputs.len());
+        let mut eiv = 0.0;
+        for input in &step.inputs {
+            // No ME for reaction materials — plain base_quantity × runs.
+            let req = input.base_quantity.saturating_mul(runs);
+            let model = prices.get(&input.type_id);
+            let unit_price = price_for(model, config.material_basis);
+            let line_cost = unit_price.unwrap_or(0.0) * req as f64;
+            eiv += eiv_unit_value(model) * input.base_quantity as f64 * runs as f64;
+            inputs.push(ReactionInputLine {
+                type_id: input.type_id,
+                name: input.name.clone(),
+                required_quantity: req,
+                unit_price,
+                line_cost,
+            });
+        }
+        let fee = job_fee(eiv, config, step);
+        install_cost += fee;
+        collected.push(ReactionLine {
+            blueprint_type_id: step.blueprint_type_id,
+            product_type_id: step.product_type_id,
+            product_name: step.product_name.clone(),
+            product_per_run: step.product_per_run,
+            runs,
+            inputs,
+        });
+    }
+    for input in &step.inputs {
+        if let Sourcing::Build(sub) = &input.sourcing {
+            // Pass down the needed units for the sub-product: the parent's
+            // `needed` output requires `needed × base_quantity / product_per_run`
+            // units of the input (ceil-divided, since inputs are whole units).
+            let needed_sub = if step.product_per_run > 0 {
+                ceil_div(
+                    needed.saturating_mul(input.base_quantity),
+                    step.product_per_run,
+                )
+            } else {
+                0
+            };
+            install_cost +=
+                collect_reactions(sub, config, prices, needed_sub, depth - 1, collected);
+        }
+    }
+    install_cost
 }
 
 /// The result of evaluating a build step.
@@ -1026,6 +1144,11 @@ pub struct ProfitBreakdown {
     /// 100, sell for 600 -> 500%). `None` when cost is zero.
     pub roi: Option<f64>,
     pub profit_per_unit: f64,
+    /// Revenue from selling excess (over-produced) buildable components —
+    /// `excess_quantity × product-basis price`, with sales tax/broker fee
+    /// applied when `include_sales_cost`. Added to net profit. 0 when
+    /// nothing is built or nothing is over-produced.
+    pub excess_revenue: f64,
     /// Meta group of the product (Tech I/II, Faction, Officer, …). Filled by the
     /// command layer from the SDE; the pure engine leaves it `None`.
     pub meta_group: Option<String>,
@@ -1049,6 +1172,10 @@ pub struct ProfitBreakdown {
     pub materials: Vec<MaterialLine>,
     /// Type ids we could not price; the row's numbers are incomplete when set.
     pub missing_prices: Vec<i64>,
+    /// Reaction starts needed to build this product's T3/reacted components
+    /// (empty when no reactions are in the tree). Always present — an empty
+    /// plan when the build tree has no reactions.
+    pub reactions: ReactionPlan,
 }
 
 /// ME-adjusted required quantity of a material for `runs` runs. `me_bonus` is the
@@ -1059,6 +1186,16 @@ pub fn required_quantity(base_quantity: i64, runs: i64, me: i64, me_bonus: f64) 
     let factor = (1.0 - (me as f64) / 100.0) * me_bonus;
     let raw = (base_quantity as f64) * (runs as f64) * factor;
     (raw.ceil() as i64).max(runs)
+}
+
+/// Ceiling division for non-negative `a` and positive `b`. Returns 0 when
+/// `b <= 0`, so a zero-yield step can't panic or produce junk.
+fn ceil_div(a: i64, b: i64) -> i64 {
+    if b <= 0 {
+        0
+    } else {
+        (a + b - 1) / b
+    }
 }
 
 /// Build a single-level manufacturing step from SDE rows (all inputs `Buy`).
@@ -1149,6 +1286,7 @@ pub fn evaluate_with_stock(
     // Materials: ME-adjusted quantity valued at the material price basis.
     let mut material_cost = 0.0;
     let mut eiv = 0.0;
+    let mut excess_revenue = 0.0;
     let mut materials = Vec::with_capacity(step.inputs.len());
     for input in &step.inputs {
         let model = prices.get(&input.type_id);
@@ -1159,9 +1297,30 @@ pub fn evaluate_with_stock(
             config.me_bonus_for_step(step),
         );
         let buy_unit = price_for(model, config.material_basis);
-        // Buildable inputs (a sub-recipe) take the cheaper of build vs buy.
+        // Buildable inputs (a sub-recipe) take the cheaper of build vs buy, and
+        // may produce more than we need → track the excess (units over-produced
+        // by a whole BPC run) for resale revenue.
+        let mut excess_quantity = 0;
         let (unit_price, built) = match &input.sourcing {
             Sourcing::Build(sub) => {
+                // How many full runs of the sub-BP cover the ME-adjusted need?
+                // ceil(required / product_per_run) runs produces that many ×
+                // product_per_run units — the surplus (if any) is excess.
+                let runs_needed = ceil_div(required, sub.product_per_run);
+                let produced = runs_needed * sub.product_per_run;
+                excess_quantity = produced - required;
+                if excess_quantity > 0 {
+                    // Excess sells at the product price basis (same as the main
+                    // product), with sales tax/broker fee when asked.
+                    let per_unit =
+                        price_for(prices.get(&input.type_id), config.product_basis).unwrap_or(0.0);
+                    let gross = per_unit * excess_quantity as f64;
+                    excess_revenue += if config.include_sales_cost {
+                        gross * (1.0 - config.sales_tax - config.broker_fee)
+                    } else {
+                        gross
+                    };
+                }
                 match (
                     build_unit_cost(sub, prices, config, MAX_BUILD_DEPTH),
                     buy_unit,
@@ -1197,6 +1356,7 @@ pub fn evaluate_with_stock(
             unit_price,
             line_cost,
             built,
+            excess_quantity,
         });
     }
 
@@ -1250,6 +1410,7 @@ pub fn evaluate_with_stock(
                     unit_price: unit,
                     line_cost: line,
                     built: false,
+                    excess_quantity: 0,
                 });
             }
             // Invention job fee, using job_fee() like manufacturing. Approximation:
@@ -1306,15 +1467,19 @@ pub fn evaluate_with_stock(
         None => (0.0, None),
     };
 
+    // Excess (over-produced buildable components) is sold at the product price
+    // basis, so it's revenue — net it against the cost side (matches EVE-IPH's
+    // `TotalRawCost – SellExcessAmount`).
     let cost = material_cost + job_fee_amount + blueprint_cost + invention_cost;
-    let profit = revenue - cost;
+    let net_cost = cost - excess_revenue;
+    let profit = revenue - net_cost;
     let margin = if revenue > 0.0 {
         Some(profit / revenue)
     } else {
         None
     };
-    let roi = if cost > 0.0 {
-        Some(profit / cost)
+    let roi = if net_cost > 0.0 {
+        Some(profit / net_cost)
     } else {
         None
     };
@@ -1324,9 +1489,19 @@ pub fn evaluate_with_stock(
         0.0
     };
 
-    // Reaction install cost: sum of job fees for all Reaction sub-steps in the
-    // build tree (reaction formulas nested under this manufacturing product).
-    let reaction_install = sum_reaction_install_cost(step, prices, config, MAX_BUILD_DEPTH);
+    // Reaction plan: collect every Reaction sub-step in the build tree and
+    // calculate how many runs each needs (reactions have no ME). The plan's
+    // install cost == the sum-of-job-fees already tracked here as
+    // `reaction_install_cost`.
+    let mut reactions = Vec::new();
+    let reaction_install = collect_reactions(
+        step,
+        config,
+        prices,
+        units_produced,
+        MAX_BUILD_DEPTH,
+        &mut reactions,
+    );
 
     ProfitBreakdown {
         blueprint_type_id: step.blueprint_type_id,
@@ -1343,6 +1518,10 @@ pub fn evaluate_with_stock(
         manufacturing_time_seconds: 0.0,
         reaction_install_cost: reaction_install,
         reaction_time_seconds: 0.0,
+        reactions: ReactionPlan {
+            lines: reactions,
+            total_install_cost: reaction_install,
+        },
         approximate: config.is_approximate(),
         blueprint_cost,
         invention_cost,
@@ -1352,6 +1531,7 @@ pub fn evaluate_with_stock(
         margin,
         roi,
         profit_per_unit,
+        excess_revenue,
         meta_group: None,
         category: None,
         group: None,
@@ -1575,6 +1755,59 @@ mod tests {
         assert_eq!(b.materials[0].have, 36);
         approx(b.materials[1].line_cost, 90.0);
         approx(b.material_cost, 90.0);
+    }
+
+    #[test]
+    fn excess_from_over_production_is_sold_as_revenue() {
+        // Product 100 needs 1× A(10); A's BPC has product_per_run = 10 (one
+        // run makes 10). Needing only 1 → 1 run produces 10 → 9 excess, sold
+        // at A's sell-min price. Mirrors EVE-IPH's `SellExcessAmount`.
+        let sub = BuildStep {
+            activity: Activity::Manufacturing,
+            blueprint_type_id: 11,
+            product_type_id: 10,
+            product_name: "A".into(),
+            product_per_run: 10,
+            inputs: vec![InputLine {
+                type_id: 20,
+                name: "B".into(),
+                base_quantity: 2,
+                sourcing: Sourcing::Buy,
+            }],
+            invention: None,
+            is_component: true,
+        };
+        let step = BuildStep {
+            activity: Activity::Manufacturing,
+            blueprint_type_id: 999,
+            product_type_id: 100,
+            product_name: "Widget".into(),
+            product_per_run: 1,
+            is_component: false,
+            inputs: vec![InputLine {
+                type_id: 10,
+                name: "A".into(),
+                base_quantity: 1,
+                sourcing: Sourcing::Build(Box::new(sub)),
+            }],
+            invention: None,
+        };
+        let prices = HashMap::from([
+            (20_i64, price(20, Some(5.0), None, None)),
+            (10, price(10, Some(6.0), None, None)),
+            (100, price(100, Some(1000.0), Some(900.0), None)),
+        ]);
+        let b = evaluate(&step, 1, 0, &prices, &ProfitConfig::default());
+
+        // 1× A required; 1 run of A's BPC makes 10 → 9 excess units.
+        assert_eq!(b.materials[0].excess_quantity, 9);
+        // Excess revenue: 9 × A's SellMin (6.0) = 54.0.
+        approx(b.excess_revenue, 54.0);
+        // Build cost: 2× B (5.0) ÷ 10 product_per_run = 1.0 per A.
+        approx(b.materials[0].line_cost, 1.0);
+        approx(b.material_cost, 1.0);
+        // Profit: 1000 revenue − (1.0 cost − 54.0 excess) = 1053.
+        approx(b.profit, 1053.0);
     }
 
     fn buildable_step() -> (BuildStep, HashMap<i64, PriceModel>) {

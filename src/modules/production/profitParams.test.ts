@@ -39,7 +39,7 @@ function baseInput(
     me: 0,
     useOwnedMe: false,
     ownedMe: {},
-        te: 0,
+    te: 0,
     ownedTe: {},
     componentMe: 0,
     componentTe: 0,
@@ -47,6 +47,7 @@ function baseInput(
     useStock: false,
     stock: undefined,
     buildComponents: false,
+    ignoreBuildGroups: [],
     includeSaleCost: false,
     sellTaxPct: 4.5,
     sellBrokerPct: 3,
@@ -118,6 +119,20 @@ describe("resolveStock", () => {
 
   it("falls back to an empty map when enabled but stock hasn't loaded yet", () => {
     expect(resolveStock(true, undefined)).toEqual({});
+  });
+});
+
+describe("composeProfitParams", () => {
+  it("forwards ignoreBuildGroups for forced-buy groups", () => {
+    const result = composeProfitParams(
+      baseInput({ ignoreBuildGroups: [1136, 332] }),
+    );
+    expect(result.ignoreBuildGroups).toEqual([1136, 332]);
+  });
+
+  it("defaults ignoreBuildGroups to empty", () => {
+    const result = composeProfitParams(baseInput());
+    expect(result.ignoreBuildGroups).toEqual([]);
   });
 });
 

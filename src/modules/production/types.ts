@@ -127,6 +127,33 @@ export const SECURITY_TIERS: Record<
   wormhole: { label: "Wormhole", hasNoLiveCostIndex: true },
 };
 
+/** Wormhole region IDs start at 31000005 (CCP convention) — these systems
+ *  have no live ESI cost index and their security float is ~0.0 so they're
+ *  indistinguishable from nullsec by security alone; pass region_id to detect
+ *  them. */
+export const WORMHOLE_REGION_ID_START = 31000005;
+
+/** Convert a system's raw SDE security float (−1.0…+1.0) into a
+ *  [`SecurityTierKey`]. Wormholes are not representable in the security
+ *  float, so pass `regionId` when available to detect WH space. */
+export function securityToTier(
+  security: number,
+  regionId: number | null = null,
+): SecurityTierKey {
+  if (regionId !== null && regionId >= WORMHOLE_REGION_ID_START) {
+    return "wormhole";
+  }
+  if (security >= 0.5) return "highsec";
+  if (security > 0.0) return "lowsec";
+  return "nullsec";
+}
+
+/** Inventory group IDs always bought (never built), matching EVE-IPH's
+ *  `AlwaysBuyFuelBlocks`/`AlwaysBuyRAMs`: 1136 = Fuel Blocks, 332 = R.A.M.-ы.
+ *  Toggled by the "Always buy fuel blocks & RAMs" checkbox in the Production
+ *  facility panel. */
+export const IGNORE_BUILD_GROUPS_DEFAULT: readonly number[] = [1136, 332];
+
 /** A production-capacity profile for one facility type (manufacturing or
  *  reaction). Matches Rust `FacilityProfile`. */
 export interface FacilityProfile {

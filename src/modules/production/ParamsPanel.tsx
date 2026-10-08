@@ -1,3 +1,6 @@
+import { useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+
 import { FeesFromCharacter } from "../../components/FeesFromCharacter";
 import {
   RegionSelect,
@@ -7,6 +10,7 @@ import { CheckboxGroup, Field } from "../../components/forms";
 import { BasisSelect, Num, Tabs } from "./components";
 import { CostIndexField } from "./CostIndexField";
 import { MultiCombo } from "./MultiCombo";
+import { productionStationSecurity } from "../../lib/api";
 import {
   applyRigBonuses,
   exportFacilityProfiles,
@@ -18,7 +22,10 @@ import {
   FACILITY_STRUCTURES,
   STRUCTURE_MAX_RIG_SIZE,
   SECURITY_TIERS,
+  WORMHOLE_REGION_ID_START,
+  securityToTier,
   type FacilityProfile,
+  type FacilityProfiles,
   type FacilityStructureKey,
   type SecurityTierKey,
 } from "./types";
@@ -61,6 +68,8 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
     setProductBestHub,
     buildComponents,
     setBuildComponents,
+    ignoreBuildFuelBlocks,
+    setIgnoreBuildFuelBlocks,
     includeSaleCost,
     setIncludeSaleCost,
     sellBrokerPct,
@@ -233,6 +242,23 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
                   onChange={(e) => setBuildComponents(e.currentTarget.checked)}
                 />
                 Build sub-components
+              </label>
+            </Field>
+            <Field label="Always buy fuel blocks &amp; RAMs">
+              <label
+                className="flex flex-col gap-1 py-1 text-xs text-zinc-300"
+                title="Fuel Blocks (group 1136) and R.A.M.-ы (group 332) are always bought at market — never built — even when building sub-components."
+              >
+                <span className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={ignoreBuildFuelBlocks}
+                    onChange={(e) =>
+                      setIgnoreBuildFuelBlocks(e.currentTarget.checked)
+                    }
+                  />
+                  Always buy fuel blocks &amp; RAMs
+                </span>
               </label>
             </Field>
             <Field label="Sale costs">
@@ -487,8 +513,69 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
     setSelectedProfile,
     implant,
     setImplant,
+    stationId,
+    regionId,
   } = wb;
   const profile = facilityProfiles[selectedProfile];
+
+  // Auto-derive the system's security tier from the selected station + region,
+  // instead of trusting a hand-picked dropdown. The tier only moves T2 rig
+  // bonuses — structure/te/cost base-bonuses are structure-driven, not
+  // security-driven. Security tier is the same for all three facility profiles
+  // (they share one solar-system context).
+  const stationSecurity = useQuery({
+    queryKey: ["production", "station_security", stationId],
+    queryFn: () =>
+      stationId ? productionStationSecurity(stationId) : Promise.resolve(null),
+    enabled: !!stationId,
+  });
+
+  // WH systems can't be represented by a security float (they're ~0.0, same as
+  // nullsec), so detect them via region ID. Otherwise derive the tier from the
+  // float: >=0.5 highsec, >0 lowsec, <=0 nullsec.
+  const effectiveSecurityTier = useMemo<SecurityTierKey>(() => {
+    if (stationSecurity.data !== null && stationSecurity.data !== undefined) {
+      return securityToTier(stationSecurity.data, regionId);
+    }
+    if (regionId >= WORMHOLE_REGION_ID_START) return "wormhole";
+    return "highsec";
+  }, [stationSecurity.data, regionId]);
+
+  // Sync the auto-derived tier across all three facility profiles and recompute
+  // each profile's rig bonuses (T2 rigs scale by security tier). Runs only when
+  // the tier changes — stable tiers are a no-op via the early `continue`.
+  useEffect(() => {
+    const profileKeys: ReadonlyArray<keyof FacilityProfiles> = [
+      "manufacturing",
+      "components",
+      "reaction",
+    ];
+    for (const key of profileKeys) {
+      const current = facilityProfiles[key];
+      if (current.security === effectiveSecurityTier) continue;
+      // Optimistically write the new tier on all slots...
+      setFacilityProfiles((prev) => ({
+        ...prev,
+        [key]: { ...prev[key], security: effectiveSecurityTier },
+      }));
+      // ...then recompute rig bonuses against the new tier (async). Functional
+      // update folds in any newer edits another tab may have written meanwhile.
+      void applyRigBonuses(
+        { ...current, security: effectiveSecurityTier },
+        current.rigTypeIds ?? [],
+      ).then((composed) => {
+        setFacilityProfiles((prev) => ({
+          ...prev,
+          [key]: {
+            ...prev[key],
+            meBonus: composed.meBonus,
+            teBonusPct: composed.teBonusPct,
+            costBonus: composed.costBonus,
+          },
+        }));
+      });
+    }
+  }, [effectiveSecurityTier, facilityProfiles, setFacilityProfiles]);
 
   // Apply a patch to the active profile, then recompose its rig bonuses from
   // the structure + security + selected rig type IDs. Running this on *every*
@@ -605,21 +692,34 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
         </select>
       </Field>
 
-      {/* Security tier dropdown */}
-      <Field label="Security">
-        <select
-          value={profile.security}
-          onChange={(e) =>
-            update({ security: e.target.value as SecurityTierKey })
-          }
-          className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
-        >
-          {Object.entries(SECURITY_TIERS).map(([key, s]) => (
-            <option key={key} value={key as SecurityTierKey}>
-              {s.label}
-            </option>
-          ))}
-        </select>
+      {/* Security tier — auto-derived from the selected station's system,
+       * NOT user-editable. T2 rig bonuses scale by security tier. */}
+      <Field
+        label="Security"
+        title={
+          stationSecurity.isPending
+            ? "Deriving security tier from the selected station…"
+            : SECURITY_TIERS[effectiveSecurityTier].hasNoLiveCostIndex
+              ? "Wormhole systems have no live ESI cost index — system cost index is a manual override"
+              : "Auto-derived from the selected station's solar system"
+        }
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-zinc-200">
+            {SECURITY_TIERS[effectiveSecurityTier].label}
+            {stationSecurity.isPending && (
+              <span className="ml-1 animate-spin text-xs">○</span>
+            )}
+          </span>
+          {SECURITY_TIERS[effectiveSecurityTier].hasNoLiveCostIndex && (
+            <span
+              className="text-xs text-amber-400"
+              title="No live ESI cost index for this system — system cost index is a manual override"
+            >
+              (manual cost index)
+            </span>
+          )}
+        </div>
       </Field>
 
       {/* Rig selector — SDE-backed multiselect. Only rigs whose slot size

@@ -86,6 +86,8 @@ export interface ComposeProfitParamsInput {
   useStock: boolean;
   stock: Record<number, number> | undefined;
   buildComponents: boolean;
+  /** Inventory group IDs always bought (never built) — e.g. fuel blocks, RAMs. */
+  ignoreBuildGroups: number[];
   includeSaleCost: boolean;
   sellTaxPct: number;
   sellBrokerPct: number;
@@ -126,6 +128,7 @@ export function composeProfitParams(
     timeSkill: input.timeSkill,
     stock: resolveStock(input.useStock, input.stock),
     buildComponents: input.buildComponents,
+    ignoreBuildGroups: input.ignoreBuildGroups,
     includeSalesCost: input.includeSaleCost,
     salesTax: input.sellTaxPct / 100,
     brokerFee: input.sellBrokerPct / 100,

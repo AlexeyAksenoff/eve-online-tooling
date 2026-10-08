@@ -15,6 +15,8 @@ use crate::model::AppError;
 use crate::sde::Sde;
 use crate::storage;
 
+#[cfg(test)]
+use super::engine::ReactionPlan;
 use super::engine::{
     evaluate_with_stock, manufacturing_step, Activity, BuildStep, InputLine, Invention, PriceBasis,
     ProfitBreakdown, ProfitConfig, Sourcing,
@@ -37,10 +39,17 @@ fn resolve_input(
     base_quantity: i64,
     depth: u32,
     build: bool,
+    ignore_build_groups: &[i64],
     path: &mut Vec<i64>,
 ) -> Result<InputLine, String> {
     needed.insert(type_id);
-    let sourcing = if !build || depth == 0 || path.contains(&type_id) {
+    // Always buy items in ignored groups (e.g. fuel blocks, RAMs) — matches
+    // EVE-IPH's AlwaysBuyFuelBlocks/RAMs. The group ID comes from
+    // invGroups.groupID via `sde.type_group`.
+    let in_ignored_group = ignore_build_groups
+        .iter()
+        .any(|&g| sde.type_group(type_id).ok().flatten() == Some(g));
+    let sourcing = if !build || depth == 0 || path.contains(&type_id) || in_ignored_group {
         Sourcing::Buy
     } else {
         let recipe = match cache.get(&type_id) {
@@ -65,6 +74,7 @@ fn resolve_input(
                         m.quantity,
                         depth - 1,
                         build,
+                        ignore_build_groups,
                         path,
                     )?);
                 }
@@ -207,6 +217,12 @@ pub struct ProfitParams {
     /// for all components. Ignored for the top-level product. 0 = no bonus.
     #[serde(default)]
     pub component_te: i64,
+    /// Inventory group IDs whose materials are always bought (never built),
+    /// even when `build_components` is on — matches EVE-IPH's
+    /// `AlwaysBuyFuelBlocks`/`AlwaysBuyRAMs`: 1136 = Fuel Blocks, 332 = R.A.M.-ы.
+    /// Empty = build normally (no forced buy).
+    #[serde(default)]
+    pub ignore_build_groups: Vec<i64>,
 }
 
 fn default_build_components() -> bool {
@@ -294,6 +310,7 @@ pub async fn production_profit(
                 m.quantity,
                 MAX_TREE_DEPTH,
                 params.build_components,
+                &params.ignore_build_groups,
                 &mut path,
             )?);
         }
@@ -905,6 +922,32 @@ pub async fn production_system_cost_index(
     Ok(map.get(&system_id).copied())
 }
 
+/// The raw SDE solar-system security (−1.0 … +1.0) for the system an NPC
+/// station sits in, resolved via `staStations → mapSolarSystems`. `None` when
+/// the station isn't in `staStations` (e.g. an Upwell structure) or the
+/// system is unknown — the caller falls back to region-based detection for
+/// WH space.
+#[tauri::command]
+#[specta::specta]
+pub fn production_station_security(
+    app: AppHandle,
+    station_id: i64,
+) -> Result<Option<f64>, AppError> {
+    if station_id <= 0 {
+        return Ok(None);
+    }
+    let sde = crate::sde::open_from_app(&app)?;
+    if let Some((system_id, _)) = sde
+        .station_location(station_id)
+        .map_err(|e| e.to_string())?
+    {
+        if let Some(info) = sde.system_info(system_id).map_err(|e| e.to_string())? {
+            return Ok(Some(info.security));
+        }
+    }
+    Ok(None)
+}
+
 /// Collects this module's specta-annotated commands for [`crate::bindings`].
 pub fn specta_commands() -> tauri_specta::Commands<tauri::Wry> {
     tauri_specta::collect_commands![
@@ -913,6 +956,7 @@ pub fn specta_commands() -> tauri_specta::Commands<tauri::Wry> {
         production_get_list,
         production_set_list,
         production_system_cost_index,
+        production_station_security,
         production_rigs,
         production_rig_bonuses,
     ]
@@ -1044,6 +1088,7 @@ mod resolve_input_tests {
             1,
             MAX_TREE_DEPTH,
             true,
+            &[],
             &mut path,
         )
         .unwrap();
@@ -1079,6 +1124,7 @@ mod resolve_input_tests {
             1,
             0,
             true,
+            &[],
             &mut path,
         )
         .unwrap();
@@ -1103,6 +1149,7 @@ mod resolve_input_tests {
             1,
             MAX_TREE_DEPTH,
             false,
+            &[],
             &mut path,
         )
         .unwrap();
@@ -1130,6 +1177,7 @@ mod resolve_input_tests {
             1,
             1,
             true,
+            &[],
             &mut path,
         )
         .unwrap();
@@ -1160,6 +1208,7 @@ mod resolve_input_tests {
             50,
             MAX_TREE_DEPTH,
             true,
+            &[],
             &mut path,
         )
         .unwrap();
@@ -1190,6 +1239,7 @@ mod resolve_input_tests {
             1,
             MAX_TREE_DEPTH,
             true,
+            &[],
             &mut path,
         )
         .unwrap();
@@ -1222,6 +1272,10 @@ mod reprice_tests {
             manufacturing_time_seconds: 0.0,
             reaction_install_cost: 0.0,
             reaction_time_seconds: 0.0,
+            reactions: ReactionPlan {
+                lines: vec![],
+                total_install_cost: 0.0,
+            },
             approximate: false,
             blueprint_cost: 0.0,
             invention_cost: 0.0,
@@ -1232,6 +1286,7 @@ mod reprice_tests {
             margin: Some(0.5),
             roi: Some(1.0),
             profit_per_unit: 10.0,
+            excess_revenue: 0.0,
             meta_group: None,
             category: None,
             group: None,
