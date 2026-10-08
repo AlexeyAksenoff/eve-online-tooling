@@ -74,7 +74,7 @@ export function useWorkbench(): WorkbenchState {
   const [productBestHub, setProductBestHub] = useState(false);
   const [blueprintCostPerRun, setBlueprintCostPerRun] = useState(0);
   const [inventionSkill, setInventionSkill] = useState(5);
-    const [decryptorTypeId, setDecryptorTypeId] = useState<number | null>(null);
+  const [decryptorTypeId, setDecryptorTypeId] = useState<number | null>(null);
   // Implant/module bonuses (e.g. Eifyr 'Guns'): additional time/ME/cost reduction.
   const [implant, setImplant] = useState<ImplantBonus | null>(null);
 
@@ -146,7 +146,7 @@ export function useWorkbench(): WorkbenchState {
   const settings = {
     regionId,
     stationId,
-        runs,
+    runs,
     me,
     useOwnedMe,
     ownedMe,
@@ -163,7 +163,7 @@ export function useWorkbench(): WorkbenchState {
     productBestHub,
     blueprintCostPerRun,
     inventionSkill,
-        decryptorTypeId,
+    decryptorTypeId,
     facilityProfiles,
     implant,
   };
@@ -197,7 +197,7 @@ export function useWorkbench(): WorkbenchState {
         inventionSkill,
         decryptorTypeId,
         productBestHub,
-                facilityProfiles,
+        facilityProfiles,
         ignoreSideProducts: true,
         implant,
       }),
@@ -408,7 +408,7 @@ export function useWorkbench(): WorkbenchState {
     setBlueprintCostPerRun,
     inventionSkill,
     setInventionSkill,
-        decryptorTypeId,
+    decryptorTypeId,
     setDecryptorTypeId,
     implant,
     setImplant,

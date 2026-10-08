@@ -42,6 +42,7 @@ export function composeFacilityProfile(
     rigTypeIds: rigTypeIds ?? [],
     systemCostIndex,
     taxRate,
+    systemId: null,
   };
 }
 

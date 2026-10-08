@@ -632,17 +632,15 @@ pub struct ProfitConfig {
     /// [`FacilityProfiles::for_activity`]); when `None`, the flat `me_bonus` /
     /// `cost_bonus` / `system_cost_index` / `facility_tax` fields are used as-is
     /// (backward compatibility with the old single-structure API).
-    pub facility_profiles: Option<FacilityProfiles>,
+pub facility_profiles: Option<FacilityProfiles>,
     /// Optional character implant(s) / facility module bonuses that apply on
     /// top of the facility profile's bonuses (time, ME, cost).
     pub implant: Option<ImplantBonus>,
     /// Owned blueprint ME per type id (for per-blueprint ME override). Used
     /// for sub-component ME when `build_components` is true.
-    #[serde(default)]
     pub owned_me: HashMap<i64, i64>,
     /// Owned blueprint TE per type id (for per-blueprint TE override). Used
     /// for sub-component TE when `build_components` is true.
-    #[serde(default)]
     pub owned_te: HashMap<i64, i64>,
 }
 
@@ -923,6 +921,7 @@ fn build_unit_cost(
         // when available, falling back to the manual `me` value via required_quantity.
         let qty = required_quantity(
             input.base_quantity,
+            1, // runs per single build-step evaluation
             component_me,
             me_bonus,
         );

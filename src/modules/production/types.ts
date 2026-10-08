@@ -132,6 +132,9 @@ export interface FacilityProfile {
   systemCostIndex: number | null;
   /** Facility tax rate (0..1), or null for manual override. */
   taxRate: number | null;
+  /** Selected build system ID for cost index lookup (frontend-only, kept
+   *  alongside systemCostIndex so the system pick survives profile switches). */
+  systemId: number | null;
   /** Selected rig type IDs — the program computes ME/TE/cost from these. */
   rigTypeIds: number[];
 }

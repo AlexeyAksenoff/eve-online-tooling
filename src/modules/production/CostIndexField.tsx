@@ -13,15 +13,37 @@ import { Field } from "../../components/forms";
  *
  * Adapted from the original percent-based field (#888) so each facility
  * profile can pin a different system's index, with the same live-fill + stale
- * fallback behaviour (serves the on-disk index map if ESI refresh fails). */
+ * fallback behaviour (serves the on-disk index map if ESI refresh fails).
+ *
+ * `systemId`/`onSystemChange` let the caller persist the chosen system so it
+ * survives profile switches. */
 export function CostIndexField({
   value,
   onChange,
+  systemId,
+  onSystemChange,
 }: {
   value: number | null;
   onChange: (n: number | null) => void;
+  systemId: number | null;
+  onSystemChange: (id: number | null) => void;
 }) {
   const [picked, setPicked] = useState<SystemMatch | null>(null);
+
+  // Initialize picked from systemId (once, when systemId is set but picked isn't).
+  useEffect(() => {
+    if (systemId != null && picked == null) {
+      // We can't resolve the name here without a reverse lookup; just set
+      // picked to a stub so the query fires. The actual name comes from
+      // the Combo's search results.
+      setPicked({ id: systemId, name: "" });
+    }
+  }, [systemId, picked]);
+
+  // Sync changes back to the caller so systemId survives profile switches.
+  useEffect(() => {
+    onSystemChange(picked?.id ?? null);
+  }, [picked, onSystemChange]);
   const idx = useQuery({
     queryKey: ["production", "costIndex", picked?.id],
     queryFn: picked ? () => productionSystemCostIndex(picked.id) : undefined,
