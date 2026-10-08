@@ -65,11 +65,15 @@ export function OrdersPage() {
       const station = new Map<string, Map<number, number>>();
       await Promise.all([
         ...regionIds.map(async (regionId) => {
-          const b = await productionProfit({ regionId });
+          const b = await productionProfit({ regionId, implant: null });
           region.set(regionId, buildCostMap(b, false));
         }),
         ...stations.map(async ({ regionId, locationId }) => {
-          const b = await productionProfit({ regionId, stationId: locationId });
+          const b = await productionProfit({
+            regionId,
+            stationId: locationId,
+            implant: null,
+          });
           station.set(`${regionId}:${locationId}`, buildCostMap(b, true));
         }),
       ]);

@@ -47,12 +47,12 @@ export async function productionSystemCostIndex(
 /** All known manufacturing rig types with their bonuses (for the Facilities
  *  tab's rig selector). */
 export async function productionManufacturingRigs(): Promise<RigTypeInfo[]> {
-  return unwrapCommand(await commands.productionManufacturingRigs());
+  return commands.productionManufacturingRigs();
 }
 
 /** All known processing (reaction) rig types with their bonus descriptions. */
 export async function productionProcessingRigs(): Promise<RigTypeInfo[]> {
-  return unwrapCommand(await commands.productionProcessingRigs());
+  return commands.productionProcessingRigs();
 }
 
 /** Compute rig bonuses from a set of selected rig type IDs + security tier.
@@ -61,7 +61,5 @@ export async function productionRigBonuses(
   rigTypeIds: number[],
   securityTier: SecurityTier,
 ): Promise<[number, number, number]> {
-  return unwrapCommand(
-    await commands.productionRigBonuses({ rigTypeIds, securityTier }),
-  );
+  return commands.productionRigBonuses(rigTypeIds, securityTier);
 }

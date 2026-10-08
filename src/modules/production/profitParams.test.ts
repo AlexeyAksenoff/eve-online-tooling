@@ -162,7 +162,7 @@ describe("composeProfitParams", () => {
     expect(params.ownedTe).toEqual({ 10: 20 });
   });
 
-    it("always passes ownedMe/ownedTe for sub-component ME resolution (regardless of useOwnedMe)", () => {
+  it("always passes ownedMe/ownedTe for sub-component ME resolution (regardless of useOwnedMe)", () => {
     const params = composeProfitParams(
       baseInput({
         useOwnedMe: false,
@@ -218,13 +218,13 @@ describe("composeProfitParams", () => {
   it("passes implant through to ProfitParams", () => {
     const params = composeProfitParams(
       baseInput({
-        implant: { time_bonus_pct: 4, material_bonus: 1.0, cost_bonus_pct: 0 },
+        implant: { timeBonusPct: 4, materialBonus: 1.0, costBonusPct: 0 },
       }),
     );
     expect(params.implant).toEqual({
-      time_bonus_pct: 4,
-      material_bonus: 1.0,
-      cost_bonus_pct: 0,
+      timeBonusPct: 4,
+      materialBonus: 1.0,
+      costBonusPct: 0,
     });
   });
 });

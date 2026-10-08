@@ -454,15 +454,17 @@ export function Num({
   min,
   max,
   step,
+  placeholder,
 }: {
-  label: string;
+  label?: string;
   value: number;
   onChange: (n: number) => void;
   min?: number;
   max?: number;
   step?: number;
+  placeholder?: string;
 }) {
-  return (
+  return label ? (
     <Field label={label}>
       <input
         type="number"
@@ -470,10 +472,22 @@ export function Num({
         min={min}
         max={max}
         step={step}
+        placeholder={placeholder}
         onChange={(e) => onChange(Number(e.currentTarget.value))}
-        className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
+        className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
       />
     </Field>
+  ) : (
+    <input
+      type="number"
+      value={value}
+      min={min}
+      max={max}
+      step={step}
+      placeholder={placeholder}
+      onChange={(e) => onChange(Number(e.currentTarget.value))}
+      className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
+    />
   );
 }
 
