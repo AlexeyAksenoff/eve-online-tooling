@@ -381,6 +381,14 @@ export type MaterialLine = {
    * True when building this input is cheaper than buying it.
    */
   built: boolean;
+  /**
+   * Excess units produced by a build sub-step when
+   * `sub.product_per_run × runs_needed` exceeds the required quantity
+   * (partial-run over-production — e.g. a 10-run BPC producing 1 unit
+   * when only 3 are needed yields 7 excess). 0 for bought inputs or
+   * when there is no over-production.
+   */
+  excessQuantity?: number;
 };
 /**
  * Which price vector to value a role (materials or product) with. Defaults use
@@ -459,6 +467,13 @@ export type ProfitBreakdown = {
    */
   roi: number | null;
   profitPerUnit: number;
+  /**
+   * Revenue from selling excess (over-produced) buildable components —
+   * `excess_quantity × product-basis price`, with sales tax/broker fee
+   * applied when `include_sales_cost`. Added to net profit. 0 when
+   * nothing is built or nothing is over-produced.
+   */
+  excessRevenue?: number;
   /**
    * Meta group of the product (Tech I/II, Faction, Officer, …). Filled by the
    * command layer from the SDE; the pure engine leaves it `None`.
@@ -626,6 +641,13 @@ export type ProfitParams = {
    * for all components. Ignored for the top-level product. 0 = no bonus.
    */
   componentTe?: number;
+  /**
+   * Inventory group IDs whose materials are always bought (never built),
+   * even when `build_components` is on — matches EVE-IPH's
+   * `AlwaysBuyFuelBlocks`/`AlwaysBuyRAMs`: 1136 = Fuel Blocks, 332 = R.A.M.-ы.
+   * Empty = build normally (no forced buy).
+   */
+  ignoreBuildGroups?: number[];
 };
 /**
  * A known manufacturing rig type with its bonus description.

@@ -37,10 +37,17 @@ fn resolve_input(
     base_quantity: i64,
     depth: u32,
     build: bool,
+    ignore_build_groups: &[i64],
     path: &mut Vec<i64>,
 ) -> Result<InputLine, String> {
     needed.insert(type_id);
-    let sourcing = if !build || depth == 0 || path.contains(&type_id) {
+    // Always buy items in ignored groups (e.g. fuel blocks, RAMs) — matches
+    // EVE-IPH's AlwaysBuyFuelBlocks/RAMs. The group ID comes from
+    // invGroups.groupID via `sde.type_group`.
+    let in_ignored_group = ignore_build_groups
+        .iter()
+        .any(|&g| sde.type_group(type_id).ok().flatten() == Some(g));
+    let sourcing = if !build || depth == 0 || path.contains(&type_id) || in_ignored_group {
         Sourcing::Buy
     } else {
         let recipe = match cache.get(&type_id) {
@@ -65,6 +72,7 @@ fn resolve_input(
                         m.quantity,
                         depth - 1,
                         build,
+                        ignore_build_groups,
                         path,
                     )?);
                 }
@@ -207,6 +215,12 @@ pub struct ProfitParams {
     /// for all components. Ignored for the top-level product. 0 = no bonus.
     #[serde(default)]
     pub component_te: i64,
+    /// Inventory group IDs whose materials are always bought (never built),
+    /// even when `build_components` is on — matches EVE-IPH's
+    /// `AlwaysBuyFuelBlocks`/`AlwaysBuyRAMs`: 1136 = Fuel Blocks, 332 = R.A.M.-ы.
+    /// Empty = build normally (no forced buy).
+    #[serde(default)]
+    pub ignore_build_groups: Vec<i64>,
 }
 
 fn default_build_components() -> bool {
@@ -294,6 +308,7 @@ pub async fn production_profit(
                 m.quantity,
                 MAX_TREE_DEPTH,
                 params.build_components,
+                &params.ignore_build_groups,
                 &mut path,
             )?);
         }
@@ -1071,6 +1086,7 @@ mod resolve_input_tests {
             1,
             MAX_TREE_DEPTH,
             true,
+            &[],
             &mut path,
         )
         .unwrap();
@@ -1106,6 +1122,7 @@ mod resolve_input_tests {
             1,
             0,
             true,
+            &[],
             &mut path,
         )
         .unwrap();
@@ -1130,6 +1147,7 @@ mod resolve_input_tests {
             1,
             MAX_TREE_DEPTH,
             false,
+            &[],
             &mut path,
         )
         .unwrap();
@@ -1157,6 +1175,7 @@ mod resolve_input_tests {
             1,
             1,
             true,
+            &[],
             &mut path,
         )
         .unwrap();
@@ -1187,6 +1206,7 @@ mod resolve_input_tests {
             50,
             MAX_TREE_DEPTH,
             true,
+            &[],
             &mut path,
         )
         .unwrap();
@@ -1217,6 +1237,7 @@ mod resolve_input_tests {
             1,
             MAX_TREE_DEPTH,
             true,
+            &[],
             &mut path,
         )
         .unwrap();
@@ -1259,6 +1280,7 @@ mod reprice_tests {
             margin: Some(0.5),
             roi: Some(1.0),
             profit_per_unit: 10.0,
+            excess_revenue: 0.0,
             meta_group: None,
             category: None,
             group: None,

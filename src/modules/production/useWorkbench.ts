@@ -23,6 +23,7 @@ import { toggle, uniqueSorted } from "../../lib/sets";
 import { parseItems } from "../../lib/parseItems";
 import {
   FORGE,
+  IGNORE_BUILD_GROUPS_DEFAULT,
   IMPORTED_BP_KEY,
   loadImported,
   type ImportedBlueprint,
@@ -48,6 +49,7 @@ export function useWorkbench(): WorkbenchState {
   const [useOwnedMe, setUseOwnedMe] = useState(true);
   const [useStock, setUseStock] = useState(false);
   const [buildComponents, setBuildComponents] = useState(false);
+  const [ignoreBuildFuelBlocks, setIgnoreBuildFuelBlocks] = useState(false);
   const [te, setTe] = useState(0);
   // Fallback ME/TE applied to ALL component build steps (is_component) when the
   // component's blueprint is not owned — one pair for all components.
@@ -157,6 +159,7 @@ export function useWorkbench(): WorkbenchState {
     ownedTe,
     useStock,
     buildComponents,
+    ignoreBuildFuelBlocks,
     te,
     componentMe,
     componentTe,
@@ -194,6 +197,9 @@ export function useWorkbench(): WorkbenchState {
         useStock,
         stock: stock.data,
         buildComponents,
+        ignoreBuildGroups: ignoreBuildFuelBlocks
+          ? [...IGNORE_BUILD_GROUPS_DEFAULT]
+          : [],
         includeSaleCost,
         sellTaxPct,
         sellBrokerPct,
@@ -396,6 +402,8 @@ export function useWorkbench(): WorkbenchState {
     setUseStock,
     buildComponents,
     setBuildComponents,
+    ignoreBuildFuelBlocks,
+    setIgnoreBuildFuelBlocks,
     te,
     setTe,
     componentMe,

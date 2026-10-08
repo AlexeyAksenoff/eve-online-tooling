@@ -68,6 +68,8 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
     setProductBestHub,
     buildComponents,
     setBuildComponents,
+    ignoreBuildFuelBlocks,
+    setIgnoreBuildFuelBlocks,
     includeSaleCost,
     setIncludeSaleCost,
     sellBrokerPct,
@@ -240,6 +242,23 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
                   onChange={(e) => setBuildComponents(e.currentTarget.checked)}
                 />
                 Build sub-components
+              </label>
+            </Field>
+            <Field label="Always buy fuel blocks &amp; RAMs">
+              <label
+                className="flex flex-col gap-1 py-1 text-xs text-zinc-300"
+                title="Fuel Blocks (group 1136) and R.A.M.-ы (group 332) are always bought at market — never built — even when building sub-components."
+              >
+                <span className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={ignoreBuildFuelBlocks}
+                    onChange={(e) =>
+                      setIgnoreBuildFuelBlocks(e.currentTarget.checked)
+                    }
+                  />
+                  Always buy fuel blocks &amp; RAMs
+                </span>
               </label>
             </Field>
             <Field label="Sale costs">

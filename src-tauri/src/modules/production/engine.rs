@@ -868,6 +868,13 @@ pub struct MaterialLine {
     pub line_cost: f64,
     /// True when building this input is cheaper than buying it.
     pub built: bool,
+    /// Excess units produced by a build sub-step when
+    /// `sub.product_per_run × runs_needed` exceeds the required quantity
+    /// (partial-run over-production — e.g. a 10-run BPC producing 1 unit
+    /// when only 3 are needed yields 7 excess). 0 for bought inputs or
+    /// when there is no over-production.
+    #[serde(default)]
+    pub excess_quantity: i64,
 }
 
 /// Invention cost detail for the drill-down (T2 items).
@@ -1026,6 +1033,12 @@ pub struct ProfitBreakdown {
     /// 100, sell for 600 -> 500%). `None` when cost is zero.
     pub roi: Option<f64>,
     pub profit_per_unit: f64,
+    /// Revenue from selling excess (over-produced) buildable components —
+    /// `excess_quantity × product-basis price`, with sales tax/broker fee
+    /// applied when `include_sales_cost`. Added to net profit. 0 when
+    /// nothing is built or nothing is over-produced.
+    #[serde(default)]
+    pub excess_revenue: f64,
     /// Meta group of the product (Tech I/II, Faction, Officer, …). Filled by the
     /// command layer from the SDE; the pure engine leaves it `None`.
     pub meta_group: Option<String>,
@@ -1059,6 +1072,16 @@ pub fn required_quantity(base_quantity: i64, runs: i64, me: i64, me_bonus: f64) 
     let factor = (1.0 - (me as f64) / 100.0) * me_bonus;
     let raw = (base_quantity as f64) * (runs as f64) * factor;
     (raw.ceil() as i64).max(runs)
+}
+
+/// Ceiling division for non-negative `a` and positive `b`. Returns 0 when
+/// `b <= 0`, so a zero-yield step can't panic or produce junk.
+fn ceil_div(a: i64, b: i64) -> i64 {
+    if b <= 0 {
+        0
+    } else {
+        (a + b - 1) / b
+    }
 }
 
 /// Build a single-level manufacturing step from SDE rows (all inputs `Buy`).
@@ -1149,6 +1172,7 @@ pub fn evaluate_with_stock(
     // Materials: ME-adjusted quantity valued at the material price basis.
     let mut material_cost = 0.0;
     let mut eiv = 0.0;
+    let mut excess_revenue = 0.0;
     let mut materials = Vec::with_capacity(step.inputs.len());
     for input in &step.inputs {
         let model = prices.get(&input.type_id);
@@ -1159,9 +1183,30 @@ pub fn evaluate_with_stock(
             config.me_bonus_for_step(step),
         );
         let buy_unit = price_for(model, config.material_basis);
-        // Buildable inputs (a sub-recipe) take the cheaper of build vs buy.
+        // Buildable inputs (a sub-recipe) take the cheaper of build vs buy, and
+        // may produce more than we need → track the excess (units over-produced
+        // by a whole BPC run) for resale revenue.
+        let mut excess_quantity = 0;
         let (unit_price, built) = match &input.sourcing {
             Sourcing::Build(sub) => {
+                // How many full runs of the sub-BP cover the ME-adjusted need?
+                // ceil(required / product_per_run) runs produces that many ×
+                // product_per_run units — the surplus (if any) is excess.
+                let runs_needed = ceil_div(required, sub.product_per_run);
+                let produced = runs_needed * sub.product_per_run;
+                excess_quantity = produced - required;
+                if excess_quantity > 0 {
+                    // Excess sells at the product price basis (same as the main
+                    // product), with sales tax/broker fee when asked.
+                    let per_unit =
+                        price_for(prices.get(&input.type_id), config.product_basis).unwrap_or(0.0);
+                    let gross = per_unit * excess_quantity as f64;
+                    excess_revenue += if config.include_sales_cost {
+                        gross * (1.0 - config.sales_tax - config.broker_fee)
+                    } else {
+                        gross
+                    };
+                }
                 match (
                     build_unit_cost(sub, prices, config, MAX_BUILD_DEPTH),
                     buy_unit,
@@ -1197,6 +1242,7 @@ pub fn evaluate_with_stock(
             unit_price,
             line_cost,
             built,
+            excess_quantity,
         });
     }
 
@@ -1250,6 +1296,7 @@ pub fn evaluate_with_stock(
                     unit_price: unit,
                     line_cost: line,
                     built: false,
+                    excess_quantity: 0,
                 });
             }
             // Invention job fee, using job_fee() like manufacturing. Approximation:
@@ -1306,15 +1353,19 @@ pub fn evaluate_with_stock(
         None => (0.0, None),
     };
 
+    // Excess (over-produced buildable components) is sold at the product price
+    // basis, so it's revenue — net it against the cost side (matches EVE-IPH's
+    // `TotalRawCost – SellExcessAmount`).
     let cost = material_cost + job_fee_amount + blueprint_cost + invention_cost;
-    let profit = revenue - cost;
+    let net_cost = cost - excess_revenue;
+    let profit = revenue - net_cost;
     let margin = if revenue > 0.0 {
         Some(profit / revenue)
     } else {
         None
     };
-    let roi = if cost > 0.0 {
-        Some(profit / cost)
+    let roi = if net_cost > 0.0 {
+        Some(profit / net_cost)
     } else {
         None
     };
@@ -1352,6 +1403,7 @@ pub fn evaluate_with_stock(
         margin,
         roi,
         profit_per_unit,
+        excess_revenue,
         meta_group: None,
         category: None,
         group: None,
@@ -1575,6 +1627,59 @@ mod tests {
         assert_eq!(b.materials[0].have, 36);
         approx(b.materials[1].line_cost, 90.0);
         approx(b.material_cost, 90.0);
+    }
+
+    #[test]
+    fn excess_from_over_production_is_sold_as_revenue() {
+        // Product 100 needs 1× A(10); A's BPC has product_per_run = 10 (one
+        // run makes 10). Needing only 1 → 1 run produces 10 → 9 excess, sold
+        // at A's sell-min price. Mirrors EVE-IPH's `SellExcessAmount`.
+        let sub = BuildStep {
+            activity: Activity::Manufacturing,
+            blueprint_type_id: 11,
+            product_type_id: 10,
+            product_name: "A".into(),
+            product_per_run: 10,
+            inputs: vec![InputLine {
+                type_id: 20,
+                name: "B".into(),
+                base_quantity: 2,
+                sourcing: Sourcing::Buy,
+            }],
+            invention: None,
+            is_component: true,
+        };
+        let step = BuildStep {
+            activity: Activity::Manufacturing,
+            blueprint_type_id: 999,
+            product_type_id: 100,
+            product_name: "Widget".into(),
+            product_per_run: 1,
+            is_component: false,
+            inputs: vec![InputLine {
+                type_id: 10,
+                name: "A".into(),
+                base_quantity: 1,
+                sourcing: Sourcing::Build(Box::new(sub)),
+            }],
+            invention: None,
+        };
+        let prices = HashMap::from([
+            (20_i64, price(20, Some(5.0), None, None)),
+            (10, price(10, Some(6.0), None, None)),
+            (100, price(100, Some(1000.0), Some(900.0), None)),
+        ]);
+        let b = evaluate(&step, 1, 0, &prices, &ProfitConfig::default());
+
+        // 1× A required; 1 run of A's BPC makes 10 → 9 excess units.
+        assert_eq!(b.materials[0].excess_quantity, 9);
+        // Excess revenue: 9 × A's SellMin (6.0) = 54.0.
+        approx(b.excess_revenue, 54.0);
+        // Build cost: 2× B (5.0) ÷ 10 product_per_run = 1.0 per A.
+        approx(b.materials[0].line_cost, 1.0);
+        approx(b.material_cost, 1.0);
+        // Profit: 1000 revenue − (1.0 cost − 54.0 excess) = 1053.
+        approx(b.profit, 1053.0);
     }
 
     fn buildable_step() -> (BuildStep, HashMap<i64, PriceModel>) {

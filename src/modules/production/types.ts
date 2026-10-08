@@ -148,6 +148,12 @@ export function securityToTier(
   return "nullsec";
 }
 
+/** Inventory group IDs always bought (never built), matching EVE-IPH's
+ *  `AlwaysBuyFuelBlocks`/`AlwaysBuyRAMs`: 1136 = Fuel Blocks, 332 = R.A.M.-ы.
+ *  Toggled by the "Always buy fuel blocks & RAMs" checkbox in the Production
+ *  facility panel. */
+export const IGNORE_BUILD_GROUPS_DEFAULT: readonly number[] = [1136, 332];
+
 /** A production-capacity profile for one facility type (manufacturing or
  *  reaction). Matches Rust `FacilityProfile`. */
 export interface FacilityProfile {
