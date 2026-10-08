@@ -87,10 +87,8 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
     setBlueprintCostPerRun,
     inventionSkill,
     setInventionSkill,
-        decryptorTypeId,
+    decryptorTypeId,
     setDecryptorTypeId,
-    implant,
-    setImplant,
     decryptors,
     minRoiPct,
     setMinRoiPct,
@@ -461,6 +459,8 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
     setFacilityProfiles,
     selectedProfile,
     setSelectedProfile,
+    implant,
+    setImplant,
   } = wb;
   const profile = facilityProfiles[selectedProfile];
 
@@ -478,12 +478,15 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
     });
   };
 
-    const structureOptions = Object.entries(FACILITY_STRUCTURES).filter(([, s]) => {
-    // "components" uses the same structures as "manufacturing" — they just get
-    // a separate facility profile (cost index, rigs, tax).
-    if (selectedProfile === "components") return s.facilityType === "manufacturing";
-    return s.facilityType === selectedProfile;
-  });
+  const structureOptions = Object.entries(FACILITY_STRUCTURES).filter(
+    ([, s]) => {
+      // "components" uses the same structures as "manufacturing" — they just get
+      // a separate facility profile (cost index, rigs, tax).
+      if (selectedProfile === "components")
+        return s.facilityType === "manufacturing";
+      return s.facilityType === selectedProfile;
+    },
+  );
 
   return (
     <div className="space-y-3">
@@ -581,25 +584,26 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
           `/industry/systems/` like the rest of the app; tax rate has no live
           source so it stays a manual override. Cost-index changes don't affect
           rig bonuses, so set the field directly (no applyRigBonuses roundtrip). */}
-                  <CostIndexField
-        value={profile.systemCostIndex}
-        onChange={(ci) =>
-          setFacilityProfiles({
-            ...facilityProfiles,
-            [selectedProfile]: { ...profile, systemCostIndex: ci },
-          })
-        }
-        systemId={profile.systemId}
-        onSystemChange={(id) =>
-          setFacilityProfiles({
-            ...facilityProfiles,
-            [selectedProfile]: { ...profile, systemId: id },
-          })
-        }
-      />
-    </Field>
+      <Field label="Cost index">
+        <CostIndexField
+          value={profile.systemCostIndex}
+          onChange={(ci) =>
+            setFacilityProfiles({
+              ...facilityProfiles,
+              [selectedProfile]: { ...profile, systemCostIndex: ci },
+            })
+          }
+          systemId={profile.systemId}
+          onSystemChange={(id) =>
+            setFacilityProfiles({
+              ...facilityProfiles,
+              [selectedProfile]: { ...profile, systemId: id },
+            })
+          }
+        />
+      </Field>
 
-    <Field label="Tax rate (fraction)">
+      <Field label="Tax rate (fraction)">
         <input
           type="number"
           value={profile.taxRate ?? ""}
@@ -620,22 +624,26 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
         />
       </Field>
 
-                   {/* Implant/module bonuses */}
+      {/* Implant/module bonuses */}
       <Field label="Implant / module bonuses">
         <div className="space-y-2 text-sm">
           <div className="grid grid-cols-3 gap-2">
             <div>
               <label className="block text-xs text-zinc-400">Time −%</label>
               <Num
-                value={implant?.time_bonus_pct ?? 0}
+                value={implant?.timeBonusPct ?? 0}
                 step={0.1}
                 min={0}
                 max={100}
                 onChange={(v) =>
                   setImplant(
                     implant
-                      ? { ...implant, time_bonus_pct: v }
-                      : { time_bonus_pct: v, material_bonus: 1.0, cost_bonus_pct: 0 },
+                      ? { ...implant, timeBonusPct: v }
+                      : {
+                          timeBonusPct: v,
+                          materialBonus: 1.0,
+                          costBonusPct: 0,
+                        },
                   )
                 }
                 placeholder="e.g. 4 (Eifyr 'Guns')"
@@ -644,15 +652,19 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
             <div>
               <label className="block text-xs text-zinc-400">ME −%</label>
               <Num
-                value={(1 - (implant?.material_bonus ?? 1)) * 100}
+                value={(1 - (implant?.materialBonus ?? 1)) * 100}
                 step={0.1}
                 min={0}
                 max={100}
                 onChange={(v) =>
                   setImplant(
                     implant
-                      ? { ...implant, material_bonus: 1 - v / 100 }
-                      : { time_bonus_pct: 0, material_bonus: 1 - v / 100, cost_bonus_pct: 0 },
+                      ? { ...implant, materialBonus: 1 - v / 100 }
+                      : {
+                          timeBonusPct: 0,
+                          materialBonus: 1 - v / 100,
+                          costBonusPct: 0,
+                        },
                   )
                 }
                 placeholder="e.g. 1"
@@ -661,15 +673,19 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
             <div>
               <label className="block text-xs text-zinc-400">Cost −%</label>
               <Num
-                value={implant?.cost_bonus_pct ?? 0}
+                value={implant?.costBonusPct ?? 0}
                 step={0.1}
                 min={0}
                 max={100}
                 onChange={(v) =>
                   setImplant(
                     implant
-                      ? { ...implant, cost_bonus_pct: v }
-                      : { time_bonus_pct: 0, material_bonus: 1.0, cost_bonus_pct: v },
+                      ? { ...implant, costBonusPct: v }
+                      : {
+                          timeBonusPct: 0,
+                          materialBonus: 1.0,
+                          costBonusPct: v,
+                        },
                   )
                 }
                 placeholder="e.g. 2"
@@ -717,7 +733,7 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
               e.target.value = "";
             }}
           />
-                                            </div>
+        </label>
       </div>
     </div>
   );

@@ -19,7 +19,12 @@ describe("production api wrapper", () => {
 
   it("forwards the whole params object to production_profit under a params key", async () => {
     invokeMock.mockResolvedValue([]);
-    const params: ProfitParams = { regionId: 10000002, runs: 10, me: 10 };
+    const params: ProfitParams = {
+      regionId: 10000002,
+      runs: 10,
+      me: 10,
+      implant: null,
+    };
     await productionProfit(params);
     expect(invokeMock).toHaveBeenCalledWith("production_profit", { params });
   });

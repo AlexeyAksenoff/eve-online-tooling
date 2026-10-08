@@ -107,18 +107,18 @@ describe("OrdersPage build-cost check", () => {
 
     // Build cost isn't pulled until the button is pressed.
     expect(invokeMock).not.toHaveBeenCalledWith("production_profit", {
-      params: { regionId: 10000002 },
+      params: { regionId: 10000002, implant: null },
     });
     expect(screen.queryByText(/below build cost/)).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /check build cost/i }));
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("production_profit", {
-        params: { regionId: 10000002 },
+        params: { regionId: 10000002, implant: null },
       }),
     );
     expect(invokeMock).toHaveBeenCalledWith("production_profit", {
-      params: { regionId: 10000002, stationId: 60003760 },
+      params: { regionId: 10000002, stationId: 60003760, implant: null },
     });
 
     // Only Widget (899.99 < 1000) is flagged; Gadget (4999.99) is fine.
