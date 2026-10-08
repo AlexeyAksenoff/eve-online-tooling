@@ -260,7 +260,7 @@ impl Window {
         t.cap_warfare_in /= w;
         t.mining_m3 /= w;
 
-        // Rank weapons by DPS and pilots by total engaged DPS; keep the top N.
+        // Rank weapons by DPS; keep the top N.
         t.by_weapon = top_n(
             weapons.into_iter().map(|(name, dmg)| WeaponRate {
                 name: name.to_string(),
@@ -270,8 +270,9 @@ impl Window {
             }),
             |r| r.dps,
         );
-        t.by_pilot = top_n(
-            pilots.into_iter().map(|(name, acc)| PilotRate {
+        let all_pilots: Vec<PilotRate> = pilots
+            .into_iter()
+            .map(|(name, acc)| PilotRate {
                 name: name.to_string(),
                 dps_out: acc.out / w,
                 dps_in: acc.inc / w,
@@ -284,9 +285,23 @@ impl Window {
                 point_out: acc.point_out,
                 scram_in: acc.scram_in,
                 point_in: acc.point_in,
-            }),
-            |r| r.dps_out + r.dps_in,
-        );
+            })
+            .collect();
+        // Rank pilots by total engaged DPS, top N — but tackle is a state
+        // flag, not a rate, so a pilot purely holding point/scram (zero
+        // damage) must never silently drop out of the breakdown just
+        // because a bigger fight has enough other, harder-hitting
+        // combatants to push them past the cutoff: anyone still flagged as
+        // tackling (either direction) who didn't make the top-N by damage
+        // is appended, so a UI reading `byPilot` for "am I tackled" never
+        // loses that signal in a large engagement.
+        let mut by_pilot = top_n(all_pilots.iter().cloned(), |r| r.dps_out + r.dps_in);
+        let included: std::collections::HashSet<String> =
+            by_pilot.iter().map(|r| r.name.clone()).collect();
+        by_pilot.extend(all_pilots.into_iter().filter(|r| {
+            !included.contains(&r.name) && (r.scram_in || r.point_in || r.scram_out || r.point_out)
+        }));
+        t.by_pilot = by_pilot;
         t
     }
 }
@@ -490,5 +505,63 @@ mod tests {
         // Global tallies mirror the per-pilot ones.
         assert_eq!(t.hits_out.misses, 1);
         assert_eq!(t.hits_out.smashes, 1);
+    }
+
+    fn tackle(ts: i64, kind: EventKind, pilot: &str) -> DpsEvent {
+        DpsEvent {
+            ts,
+            kind,
+            amount: 0,
+            pilot: Some(pilot.to_string()),
+            ship: None,
+            weapon: None,
+            quality: None,
+            ore: None,
+            volume: 0.0,
+        }
+    }
+
+    #[test]
+    fn keeps_a_zero_damage_tackler_in_by_pilot_even_in_a_big_fight() {
+        // A pure tackler (zero damage, continuously scramming you) must
+        // never drop out of `by_pilot` just because TOP_N=10 other pilots
+        // are out-damaging them — tackle is a state flag, not a rate.
+        let mut w = Window::new(10);
+        w.push(tackle(1, EventKind::ScramIn, "Tackler"));
+        for i in 0..10 {
+            w.push(dmg(
+                1,
+                EventKind::DamageIn,
+                100 + i,
+                &format!("Hitter{i}"),
+                "Gun",
+            ));
+        }
+        let t = w.tick(2);
+        assert_eq!(t.by_pilot.len(), 11); // top-10 hitters + the appended tackler
+        let tackler = t
+            .by_pilot
+            .iter()
+            .find(|p| p.name == "Tackler")
+            .expect("tackler must still be present");
+        assert!(tackler.scram_in);
+        assert_eq!(tackler.dps_out, 0.0);
+    }
+
+    #[test]
+    fn still_caps_non_tackling_pilots_at_top_n() {
+        // Without any tackle flags, behaviour is unchanged: exactly TOP_N.
+        let mut w = Window::new(10);
+        for i in 0..15 {
+            w.push(dmg(
+                1,
+                EventKind::DamageIn,
+                100 + i,
+                &format!("Hitter{i}"),
+                "Gun",
+            ));
+        }
+        let t = w.tick(2);
+        assert_eq!(t.by_pilot.len(), TOP_N);
     }
 }

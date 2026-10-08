@@ -71,11 +71,22 @@ describe("nextFightTicks", () => {
     expect(buf.map((t) => t.at)).toEqual([1, 2]);
   });
 
-  it("starts a fresh buffer when a new fight begins after a freeze", () => {
+  it("stays frozen through a resumed fight too (#950) — no data loss until the caller clears it", () => {
     let buf: DpsTick[] = [];
     buf = nextFightTicks(buf, tick({ dpsIn: 10 }, 1));
-    buf = nextFightTicks(buf, tick({}, 2)); // frozen
-    buf = nextFightTicks(buf, tick({ dpsIn: 8 }, 20)); // new fight
+    buf = nextFightTicks(buf, tick({}, 2)); // frozen — columns keep this data
+    const frozen = buf;
+    // Previously this silently discarded `frozen` and restarted from a
+    // single tick the instant any activity resumed — the "Attackers"/"My
+    // weapons" columns going empty mid-fight. Now it stays exactly as-is;
+    // only an explicit reset (the panel's Dismiss, which clears the buffer
+    // itself) starts a new one.
+    buf = nextFightTicks(buf, tick({ dpsIn: 8 }, 20)); // activity resumes
+    expect(buf).toBe(frozen);
+    expect(buf.map((t) => t.at)).toEqual([1, 2]);
+    // Dismiss clears the buffer (provider-level, not the reducer's job);
+    // only then does the next fight start clean.
+    buf = nextFightTicks([], tick({ dpsIn: 8 }, 20));
     expect(buf.map((t) => t.at)).toEqual([20]);
   });
 
