@@ -42,6 +42,11 @@ pub struct HypotheticalConfig {
     /// applied, a fixed EVE invention-mechanics constant, not a guess.
     #[serde(default = "default_t2_me")]
     pub t2_me: i64,
+    /// Combined structure+rig ME multiplier (1.0 = none, 0.99 = −1%). Passed
+    /// through to [`required_quantity`] so the mass-prod material list matches
+    /// the user's chosen facility + rigs (#883), not the old hardcoded 1.0.
+    #[serde(default = "default_me_bonus")]
+    pub me_bonus: f64,
 }
 
 impl Default for HypotheticalConfig {
@@ -50,6 +55,7 @@ impl Default for HypotheticalConfig {
             t1_runs: default_t1_runs(),
             t1_me: default_t1_me(),
             t2_me: default_t2_me(),
+            me_bonus: default_me_bonus(),
         }
     }
 }
@@ -64,6 +70,10 @@ fn default_t1_me() -> i64 {
 
 fn default_t2_me() -> i64 {
     BASE_T2_ME
+}
+
+fn default_me_bonus() -> f64 {
+    1.0
 }
 
 /// One pasted "blueprint to build" line: a name plus an optional explicit
@@ -168,6 +178,7 @@ pub struct MassProductionPlan {
 fn sum_copy_materials(
     materials: &[BlueprintMaterial],
     copies: &[(i64, i64, i64)], // (runs, material_efficiency, count)
+    me_bonus: f64,
 ) -> HashMap<i64, i64> {
     let mut totals: HashMap<i64, i64> = HashMap::new();
     for &(runs, me, count) in copies {
@@ -175,7 +186,7 @@ fn sum_copy_materials(
             continue;
         }
         for m in materials {
-            let per_copy = required_quantity(m.quantity, runs, me, 1.0);
+            let per_copy = required_quantity(m.quantity, runs, me, me_bonus);
             *totals.entry(m.material_type_id).or_insert(0) += per_copy * count;
         }
     }
@@ -459,7 +470,9 @@ pub async fn massprod_plan(
             let materials = sde
                 .blueprint_materials(*type_id)
                 .map_err(|e| e.to_string())?;
-            for (material_type_id, qty) in sum_copy_materials(&materials, &copies) {
+            for (material_type_id, qty) in
+                sum_copy_materials(&materials, &copies, hypothetical_config.me_bonus)
+            {
                 *material_totals.entry(material_type_id).or_insert(0) += qty;
             }
         }
@@ -522,7 +535,7 @@ mod tests {
         let materials = vec![material(11399, 100)];
         let copies = vec![(10, 0, 1), (5, 10, 1)];
 
-        let totals = sum_copy_materials(&materials, &copies);
+        let totals = sum_copy_materials(&materials, &copies, 1.0);
 
         // Correct (per-copy, summed): ceil(100*10*1.0) + ceil(100*5*0.9)
         //   = 1000 + 450 = 1450.
@@ -540,7 +553,7 @@ mod tests {
         let materials = vec![material(11399, 17)];
         let copies = vec![(10, 2, 30)];
 
-        let totals = sum_copy_materials(&materials, &copies);
+        let totals = sum_copy_materials(&materials, &copies, 1.0);
 
         // Per copy: ceil(17*10*0.98) = ceil(166.6) = 167; times 30 copies.
         assert_eq!(totals[&11399], 167 * 30);
@@ -552,7 +565,7 @@ mod tests {
         // runs = -1 marks a BPO (unbounded); count = 0 is a degenerate stack.
         let copies = vec![(-1, 0, 1), (10, 0, 0)];
 
-        let totals = sum_copy_materials(&materials, &copies);
+        let totals = sum_copy_materials(&materials, &copies, 1.0);
 
         assert!(totals.is_empty());
     }
@@ -653,6 +666,7 @@ mod tests {
             t1_runs: 5,
             t1_me: 8,
             t2_me: 4,
+            me_bonus: 1.0,
         };
 
         let t1 = assume_blueprint(&sde, &meta, 998, &config).unwrap();

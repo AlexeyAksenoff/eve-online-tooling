@@ -1174,8 +1174,8 @@ pub struct ProfitBreakdown {
     /// Type ids we could not price; the row's numbers are incomplete when set.
     pub missing_prices: Vec<i64>,
     /// Reaction starts needed to build this product's T3/reacted components
-    /// (empty when no reactions are in the tree).
-    #[serde(default)]
+    /// (empty when no reactions are in the tree). Always present — an empty
+    /// plan when the build tree has no reactions.
     pub reactions: ReactionPlan,
 }
 

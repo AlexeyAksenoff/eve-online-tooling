@@ -517,7 +517,8 @@ export type ProfitBreakdown = {
   missingPrices: number[];
   /**
    * Reaction starts needed to build this product's T3/reacted components
-   * (empty when no reactions are in the tree).
+   * (empty when no reactions are in the tree). Always present — an empty
+   * plan when the build tree has no reactions.
    */
   reactions: ReactionPlan;
 };
