@@ -6,6 +6,7 @@ import {
   productionProfit,
   rosterStock,
   sdeUpdate,
+  type ImplantBonus,
   type PriceBasis,
   type ProfitBreakdown,
   type ProfitParams,
@@ -26,9 +27,13 @@ import {
   loadImported,
   type ImportedBlueprint,
   type ResultsView,
-  type StructureKey,
   type Tab,
 } from "./types";
+import {
+  loadFacilityProfiles,
+  saveFacilityProfiles,
+  type FacilityProfiles,
+} from "./facilityProfiles";
 import type { ActiveFilter, WorkbenchState } from "./workbenchTypes";
 
 export function useWorkbench(): WorkbenchState {
@@ -44,16 +49,24 @@ export function useWorkbench(): WorkbenchState {
   const [useStock, setUseStock] = useState(false);
   const [buildComponents, setBuildComponents] = useState(false);
   const [te, setTe] = useState(0);
+  // Fallback ME/TE applied to ALL component build steps (is_component) when the
+  // component's blueprint is not owned — one pair for all components.
+  const [componentMe, setComponentMe] = useState(0);
+  const [componentTe, setComponentTe] = useState(0);
   const [timeSkill, setTimeSkill] = useState(5);
-  const [structure, setStructure] = useState<StructureKey>("npc");
-  // Rig role bonuses (%), composed onto the structure preset. Auto rig×security
-  // math varies by patch/security and isn't reliably knowable here, so the user
-  // supplies the effective rig bonus (e.g. a T2 ME rig in null ≈ 2.4%).
-  const [rigMePct, setRigMePct] = useState(0);
-  const [rigTePct, setRigTePct] = useState(0);
-  const [rigCostPct, setRigCostPct] = useState(0);
-  const [costIndexPct, setCostIndexPct] = useState(5);
-  const [facilityTaxPct, setFacilityTaxPct] = useState(0);
+
+  // Facility profiles (Manufacturing + Reaction). Loaded from localStorage,
+  // persisted on change. Edited in the Facilities tab.
+  const [facilityProfiles, setFacilityProfiles] = useState<FacilityProfiles>(
+    () => loadFacilityProfiles(),
+  );
+  useEffect(() => {
+    saveFacilityProfiles(facilityProfiles);
+  }, [facilityProfiles]);
+  const [selectedProfile, setSelectedProfile] = useState<
+    "manufacturing" | "reaction" | "components"
+  >("manufacturing");
+
   // Sale costs on the product: broker fee + sales tax, subtracted from revenue.
   const [includeSaleCost, setIncludeSaleCost] = useState(false);
   const [sellBrokerPct, setSellBrokerPct] = useState(3);
@@ -66,6 +79,8 @@ export function useWorkbench(): WorkbenchState {
   const [blueprintCostPerRun, setBlueprintCostPerRun] = useState(0);
   const [inventionSkill, setInventionSkill] = useState(5);
   const [decryptorTypeId, setDecryptorTypeId] = useState<number | null>(null);
+  // Implant/module bonuses (e.g. Eifyr 'Guns'): additional time/ME/cost reduction.
+  const [implant, setImplant] = useState<ImplantBonus | null>(null);
 
   // Client-side filters — applied instantly to the results.
   const [name, setName] = useState("");
@@ -138,16 +153,14 @@ export function useWorkbench(): WorkbenchState {
     runs,
     me,
     useOwnedMe,
+    ownedMe,
+    ownedTe,
     useStock,
     buildComponents,
     te,
+    componentMe,
+    componentTe,
     timeSkill,
-    structure,
-    rigMePct,
-    rigTePct,
-    rigCostPct,
-    costIndexPct,
-    facilityTaxPct,
     includeSaleCost,
     sellBrokerPct,
     sellTaxPct,
@@ -157,6 +170,8 @@ export function useWorkbench(): WorkbenchState {
     blueprintCostPerRun,
     inventionSkill,
     decryptorTypeId,
+    facilityProfiles,
+    implant,
   };
   // Snapshot of `settings` as of the last calculate, to detect staleness.
   const [calcSettings, setCalcSettings] = useState(settings);
@@ -176,15 +191,9 @@ export function useWorkbench(): WorkbenchState {
         te,
         ownedTe,
         timeSkill,
-        structure,
-        rigMePct,
-        rigTePct,
-        rigCostPct,
         useStock,
         stock: stock.data,
         buildComponents,
-        costIndexPct,
-        facilityTaxPct,
         includeSaleCost,
         sellTaxPct,
         sellBrokerPct,
@@ -194,6 +203,11 @@ export function useWorkbench(): WorkbenchState {
         inventionSkill,
         decryptorTypeId,
         productBestHub,
+        facilityProfiles,
+        ignoreSideProducts: true,
+        implant,
+        componentMe,
+        componentTe,
       }),
     );
   }
@@ -384,20 +398,12 @@ export function useWorkbench(): WorkbenchState {
     setBuildComponents,
     te,
     setTe,
+    componentMe,
+    setComponentMe,
+    componentTe,
+    setComponentTe,
     timeSkill,
     setTimeSkill,
-    structure,
-    setStructure,
-    rigMePct,
-    setRigMePct,
-    rigTePct,
-    setRigTePct,
-    rigCostPct,
-    setRigCostPct,
-    costIndexPct,
-    setCostIndexPct,
-    facilityTaxPct,
-    setFacilityTaxPct,
     includeSaleCost,
     setIncludeSaleCost,
     sellBrokerPct,
@@ -416,6 +422,12 @@ export function useWorkbench(): WorkbenchState {
     setInventionSkill,
     decryptorTypeId,
     setDecryptorTypeId,
+    implant,
+    setImplant,
+    facilityProfiles,
+    setFacilityProfiles,
+    selectedProfile,
+    setSelectedProfile,
     name,
     setName,
     categories,

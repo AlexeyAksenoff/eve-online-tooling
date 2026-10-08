@@ -3,17 +3,7 @@ import { STORAGE_KEYS } from "../../lib/storageKeys";
 export type ResultsView =
   "opportunities" | "favorites" | "blacklist" | "library";
 
-// Manufacturing structure presets → material/cost/time bonuses (role bonuses).
-export type StructureKey = "npc" | "raitaru" | "azbel" | "sotiyo";
-export const STRUCTURES: Record<
-  StructureKey,
-  { label: string; meBonus: number; costBonus: number; tePct: number }
-> = {
-  npc: { label: "NPC station", meBonus: 1.0, costBonus: 0, tePct: 0 },
-  raitaru: { label: "Raitaru", meBonus: 0.99, costBonus: 0.03, tePct: 15 },
-  azbel: { label: "Azbel", meBonus: 0.99, costBonus: 0.04, tePct: 20 },
-  sotiyo: { label: "Sotiyo", meBonus: 0.99, costBonus: 0.05, tePct: 30 },
-};
+// --- Facility profile types (mirror Rust `FacilityProfile`/`FacilityProfiles`) ---
 
 /** A blueprint the user imported to model (not necessarily owned via ESI). */
 export interface ImportedBlueprint {
@@ -36,4 +26,141 @@ export function loadImported(): ImportedBlueprint[] {
 
 export const FORGE = 10000002;
 
-export type Tab = "item" | "market" | "industry" | "thresholds" | "paste";
+export type Tab =
+  "item" | "market" | "industry" | "thresholds" | "paste" | "facilities";
+
+// --- Facility profile types (mirror Rust `FacilityProfile`/`FacilityProfiles`) ---
+
+export type FacilityType = "manufacturing" | "reaction" | "components";
+
+export type FacilityStructureKey =
+  "npcStation" | "raitaru" | "azbel" | "sotiyo" | "athanor" | "tatara";
+
+export const FACILITY_STRUCTURES: Record<
+  FacilityStructureKey,
+  {
+    label: string;
+    /** Combined ME multiplier (1.0 = none, 0.99 = −1%). */
+    meBonus: number;
+    /** TE bonus percent (e.g. 15 = −15% time). */
+    tePct: number;
+    /** Cost saving fraction (0.03 = −3%). */
+    costBonus: number;
+    /** Tatara role-bonus time multiplier (0.25 = −25%). */
+    roleBonusTime: number;
+    /** Which activity this structure hosts. */
+    facilityType: FacilityType;
+  }
+> = {
+  npcStation: {
+    label: "NPC station",
+    meBonus: 1.0,
+    tePct: 0,
+    costBonus: 0,
+    roleBonusTime: 0,
+    facilityType: "manufacturing",
+  },
+  raitaru: {
+    label: "Raitaru",
+    meBonus: 0.99,
+    tePct: 15,
+    costBonus: 0.03,
+    roleBonusTime: 0,
+    facilityType: "manufacturing",
+  },
+  azbel: {
+    label: "Azbel",
+    meBonus: 0.99,
+    tePct: 20,
+    costBonus: 0.04,
+    roleBonusTime: 0,
+    facilityType: "manufacturing",
+  },
+  sotiyo: {
+    label: "Sotiyo",
+    meBonus: 0.99,
+    tePct: 30,
+    costBonus: 0.05,
+    roleBonusTime: 0,
+    facilityType: "manufacturing",
+  },
+  athanor: {
+    label: "Athanor",
+    meBonus: 0.99,
+    tePct: 0,
+    costBonus: 0.04,
+    roleBonusTime: 0,
+    facilityType: "reaction",
+  },
+  tatara: {
+    label: "Tatara",
+    meBonus: 0.99,
+    tePct: 0,
+    costBonus: 0.05,
+    roleBonusTime: 0.25,
+    facilityType: "reaction",
+  },
+};
+
+/** Max rig slot size each structure can host (S=1, M=2, L=3, XL=4) — from the
+ * SDE `rigSize` attribute (1547) on the structure type. A rig only fits a slot
+ * of its own size, so the rig picker offers only `rig.rigSize == maxRigSize`.
+ * 0 = no rig slots (NPC station). */
+export const STRUCTURE_MAX_RIG_SIZE: Record<FacilityStructureKey, number> = {
+  npcStation: 0,
+  raitaru: 2,
+  azbel: 3,
+  sotiyo: 4,
+  athanor: 2,
+  tatara: 3,
+};
+
+export type SecurityTierKey = "highsec" | "lowsec" | "nullsec" | "wormhole";
+
+export const SECURITY_TIERS: Record<
+  SecurityTierKey,
+  { label: string; hasNoLiveCostIndex: boolean }
+> = {
+  highsec: { label: "Highsec", hasNoLiveCostIndex: false },
+  lowsec: { label: "Lowsec", hasNoLiveCostIndex: false },
+  nullsec: { label: "Nullsec", hasNoLiveCostIndex: false },
+  wormhole: { label: "Wormhole", hasNoLiveCostIndex: true },
+};
+
+/** A production-capacity profile for one facility type (manufacturing or
+ *  reaction). Matches Rust `FacilityProfile`. */
+export interface FacilityProfile {
+  facilityType: FacilityType;
+  structure: FacilityStructureKey;
+  security: SecurityTierKey;
+  /** Combined structure+rig ME multiplier (e.g. 0.97 = −3%). */
+  meBonus: number;
+  /** Combined structure+rig TE bonus percent (e.g. 20 = −20% time). */
+  teBonusPct: number;
+  /** Combined structure+rig cost saving fraction (0..1). */
+  costBonus: number;
+  /** Tatara role-bonus time (0.25) or 0 otherwise. */
+  roleBonusTime: number;
+  /** System cost index (0..1), or null for WH. */
+  systemCostIndex: number | null;
+  /** Facility tax rate (0..1), or null for manual override. */
+  taxRate: number | null;
+  /** Selected build system ID for cost index lookup (frontend-only, kept
+   *  alongside systemCostIndex so the system pick survives profile switches). */
+  systemId: number | null;
+  /** Selected rig type IDs — the program computes ME/TE/cost from these. */
+  rigTypeIds: number[];
+}
+
+/** A triple of facility profiles: manufacturing, components, + reaction.
+ *  Matches Rust `FacilityProfiles` field order (manufacturing → components →
+ *  reaction); the ordering must match Rust exactly, otherwise JSON round-trip
+ *  through localStorage swaps the `components` and `reaction` halves. */
+export interface FacilityProfiles {
+  manufacturing: FacilityProfile;
+  components: FacilityProfile;
+  reaction: FacilityProfile;
+}
+
+/** Storage key for saved facility profiles. */
+export const FACILITY_PROFILES_STORAGE_KEY = "production.facilityProfiles";

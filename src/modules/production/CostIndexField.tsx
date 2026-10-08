@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   productionSystemCostIndex,
@@ -8,16 +8,51 @@ import {
 import { Combo } from "../../components/Combo";
 import { Field } from "../../components/forms";
 
-/** Cost-index % field with a build-system search that fills it from the live
- *  ESI per-system index. The number stays editable as a manual override. */
+/** Facility cost-index fraction (0..1) with a build-system lookup that fills
+ * it from live ESI `/industry/systems/`. `null` = wormhole / manual override.
+ *
+ * Adapted from the original percent-based field (#888) so each facility
+ * profile can pin a different system's index, with the same live-fill + stale
+ * fallback behaviour (serves the on-disk index map if ESI refresh fails).
+ *
+ * `systemId`/`onSystemChange` let the caller persist the chosen system so it
+ * survives profile switches. */
 export function CostIndexField({
   value,
   onChange,
+  systemId,
+  onSystemChange,
 }: {
-  value: number;
-  onChange: (n: number) => void;
+  value: number | null;
+  onChange: (n: number | null) => void;
+  systemId: number | null;
+  onSystemChange: (id: number | null) => void;
 }) {
   const [picked, setPicked] = useState<SystemMatch | null>(null);
+
+  // Sync `picked` to the latest systemId — full reset on change, so that
+  // switching facility tabs (each with its OWN systemId) loads the correct
+  // system instead of keeping the stale one from the previous tab. Only
+  // re-run when systemId actually changes, so we don't clobber a still-valid
+  // `picked` on unrelated renders (which previously created a reset loop via
+  // the reverse sync-effect below).
+  const prevSystemIdRef = useRef(systemId);
+  useEffect(() => {
+    if (systemId === prevSystemIdRef.current) return; // no change → don't reset
+    prevSystemIdRef.current = systemId;
+    if (systemId != null) {
+      setPicked({ id: systemId, name: "" });
+    } else {
+      // Wormhole / manual override — no pinned system, keep whatever the
+      // user typed as `value`.
+      setPicked(null);
+    }
+  }, [systemId]);
+
+  // Sync changes back to the caller so systemId survives profile switches.
+  useEffect(() => {
+    onSystemChange(picked?.id ?? null);
+  }, [picked, onSystemChange]);
   const idx = useQuery({
     queryKey: ["production", "costIndex", picked?.id],
     queryFn: picked ? () => productionSystemCostIndex(picked.id) : undefined,
@@ -27,19 +62,23 @@ export function CostIndexField({
   // Fill the field from the live index when a system resolves.
   useEffect(() => {
     if (picked && typeof idx.data === "number") {
-      onChange(Math.round(idx.data * 10000) / 100);
+      onChange(parseFloat(idx.data.toFixed(4)));
     }
   }, [idx.data, picked, onChange]);
 
   return (
-    <Field label="Cost index %">
+    <Field label="Cost index (fraction, from system)">
       <input
         type="number"
-        value={value}
+        value={value == null ? "" : String(value)}
+        onChange={(e) =>
+          onChange(e.target.value ? Number(e.target.value) : null)
+        }
+        step={0.001}
         min={0}
-        step={0.1}
-        onChange={(e) => onChange(Number(e.currentTarget.value))}
-        className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
+        max={1}
+        placeholder="↳ fill from a build system…"
+        className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
       />
       <div className="mt-1">
         <Combo
@@ -62,7 +101,7 @@ export function CostIndexField({
         </span>
       )}
       {picked && !idx.isLoading && idx.data == null && (
-        <span className="text-[10px] text-amber-500">
+        <span className="text-[10px] text-amber-400">
           No live index for {picked.name} — keeping your value
         </span>
       )}

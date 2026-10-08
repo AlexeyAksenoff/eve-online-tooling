@@ -37,6 +37,7 @@ export const STORAGE_KEYS = {
   localintelAlertNeutrals: "localintel.alertNeutrals",
   // Production
   importedBlueprints: "production.importedBlueprints",
+  facilityProfiles: "production.facilityProfiles",
   // "Support my work" first-run prompt (referral / creator code)
   supportSeen: "support.firstRunSeen",
   // Settings: check for a newer release on startup (default on, opt-out)

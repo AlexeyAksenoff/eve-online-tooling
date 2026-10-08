@@ -14,6 +14,12 @@ const T2_ROW: ProfitBreakdown = {
   unitsProduced: 1,
   materialCost: 1_000,
   jobFee: 100,
+  manufacturingCostIndex: 0,
+  manufacturingInstallCost: 100,
+  manufacturingTimeSeconds: 600,
+  reactionInstallCost: 0,
+  reactionTimeSeconds: 0,
+  approximate: false,
   blueprintCost: 0,
   inventionCost: 500,
   invention: {

@@ -582,6 +582,49 @@ function BreakdownRow({ row }: { row: ProfitBreakdown }) {
           </tbody>
         </table>
 
+        {/* Facility summary: time + install cost for manufacturing vs reactions */}
+        <div className="mt-3 space-y-1 text-xs">
+          <div className="flex justify-between text-zinc-400">
+            <span>Manufacturing time</span>
+            <span className="tabular-nums text-zinc-300">
+              {formatDuration(
+                row.manufacturingTimeSeconds || row.jobTimeSeconds,
+              )}
+            </span>
+          </div>
+          <div className="flex justify-between text-zinc-400">
+            <span>Manufacturing install</span>
+            <span className="tabular-nums text-zinc-300">
+              {formatIsk(row.manufacturingInstallCost)}
+            </span>
+          </div>
+          {row.reactionTimeSeconds > 0 && (
+            <div className="flex justify-between text-zinc-400">
+              <span>Reaction time</span>
+              <span className="tabular-nums text-zinc-300">
+                {formatDuration(row.reactionTimeSeconds)}
+              </span>
+            </div>
+          )}
+          {row.reactionInstallCost > 0 && (
+            <div className="flex justify-between text-zinc-400">
+              <span>Reaction install</span>
+              <span className="tabular-nums text-zinc-300">
+                {formatIsk(row.reactionInstallCost)}
+              </span>
+            </div>
+          )}
+          {row.approximate && (
+            <div className="flex items-center gap-1 text-amber-400">
+              <AlertTriangle size={12} />
+              <span>
+                Approximate — facility cost index or tax not set (e.g. WH
+                space).
+              </span>
+            </div>
+          )}
+        </div>
+
         {row.invention && (
           <div className="mt-3">
             <div className="mb-1 text-xs font-medium text-zinc-400">

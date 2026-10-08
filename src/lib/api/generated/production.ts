@@ -94,6 +94,56 @@ export const commands = {
       else return { status: "error", error: e as AppError };
     }
   },
+  /**
+   * All industry rigs for one facility type, readable right now. Rigs are
+   * filtered to those whose slot size exactly matches `max_rig_size` (the size
+   * of the slot the chosen structure exposes — a rig only fits a slot of its
+   * own size). `"reaction"` → refinery/reactor rigs (`RefRig*` dogma attrs,
+   * reduce reactant usage & reaction time); `"manufacturing"`/`"components"` →
+   * engineering rigs (`EngRig*` attrs). Bonuses are the base (un-scaled)
+   * percentages; [`production_rig_bonuses`] security-scales them on selection.
+   */
+  async productionRigs(
+    facilityType: FacilityType,
+    maxRigSize: number,
+  ): Promise<Result<RigTypeInfo[], AppError>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("production_rigs", {
+          facilityType,
+          maxRigSize,
+        }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as AppError };
+    }
+  },
+  /**
+   * Resolve selected rig type IDs + facility security tier into
+   * `(meBonus, teBonusPct, costBonusPct)` — same contract as the engine's
+   * `rig_bonuses_from_ids`. Legacy rigs (1955-1978) use the built-in bonus
+   * table; any other Standup rig has its bonus read from the SDE dogma attrs
+   * and security-scaled by the rig's own modifiers (see [`sde_rig_bonus`]).
+   */
+  async productionRigBonuses(
+    rigTypeIds: number[],
+    securityTier: SecurityTier,
+  ): Promise<Result<[number, number, number], AppError>> {
+    try {
+      return {
+        status: "ok",
+        data: await TAURI_INVOKE("production_rig_bonuses", {
+          rigTypeIds,
+          securityTier,
+        }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: "error", error: e as AppError };
+    }
+  },
 };
 
 /** user-defined events **/
@@ -139,6 +189,121 @@ export type Decryptor = {
    * Added to runs per successful invention.
    */
   runModifier: number;
+};
+/**
+ * A production-capacity profile: the facility a job runs in, with its
+ * structure/rig/security bonuses composed. One profile per facility type
+ * (manufacturing vs. reaction); passed through the recursive build-vs-buy
+ * tree so each step is costed against the right facility.
+ *
+ * The `me_bonus`/`te_bonus_pct`/`cost_bonus` fields here are the **final
+ * composed multipliers** (structure × rig), not raw rig percentages — the
+ * frontend computes them the same way `composeStructureBonuses` does today
+ * and hands them in pre-composed, so the engine stays flat and pure.
+ */
+export type FacilityProfile = {
+  /**
+   * Which activity this profile applies to (drives structure preset).
+   */
+  facilityType: FacilityType;
+  /**
+   * The structure type (Raitaru, Tatara, etc.) or NPC station.
+   */
+  structure: StructureType;
+  /**
+   * Security tier of the system (determines approximate-ness).
+   */
+  security: SecurityTier;
+  /**
+   * Combined structure+rig material multiplier (e.g. 0.97 = −3%).
+   */
+  meBonus: number;
+  /**
+   * Combined structure+rig TE bonus in percent (e.g. 20 = −20% time).
+   */
+  teBonusPct: number;
+  /**
+   * Combined structure+rig cost saving on cost-index portion (fraction).
+   */
+  costBonus: number;
+  /**
+   * Tatara role-bonus time multiplier (0.25 for Tatara, 0 otherwise).
+   */
+  roleBonusTime: number;
+  /**
+   * Selected rig type IDs (from the `production_manufacturing_rigs` list).
+   * The frontend sends these; the engine computes ME/TE/cost via
+   * [`rig_bonuses_from_ids`] and folds them into the bonuses above.
+   */
+  rigTypeIds: number[];
+  /**
+   * System cost index (0..1), or `None` for WH (manual override).
+   */
+  systemCostIndex: number | null;
+  /**
+   * Facility tax rate (0..1), or `None` for manual override.
+   */
+  taxRate: number | null;
+};
+/**
+ * A triple of facility profiles: manufacturing, components, and reaction.
+ * Passed through the build-vs-buy tree so each `Activity::Manufacturing`
+ * node uses the manufacturing or components facility (depending on whether
+ * it's a top-level product or a sub-component) and each `Activity::Reaction`
+ * node uses the reaction facility.
+ *
+ * `components` is always a manufacturing-type facility (NPC station or
+ * Upwell manufacturing structure) — it just has its own cost index, tax,
+ * and rig bonus set because components are often built at a different
+ * location than the final product.
+ *
+ * Field order matches the Facilities tab button order (Manufacturing |
+ * Components | Reaction). `reaction` is last because refinery/reactor rigs
+ * are structurally distinct from engineering (manufacturing) rigs.
+ */
+export type FacilityProfiles = {
+  manufacturing: FacilityProfile;
+  components: FacilityProfile;
+  reaction: FacilityProfile;
+};
+/**
+ * Facility type for a [`FacilityProfile`]. Manufacturing profiles use
+ * Upwell-structures or NPC stations; reaction profiles use Athanor/Tatara.
+ * Component profiles apply to sub-build steps that are components of a larger
+ * product (T2/T3 ship components, built at a different facility with different rigs).
+ */
+export type FacilityType = "manufacturing" | "reaction" | "components";
+/**
+ * Character implant or facility module bonus that applies on top of the
+ * facility profile's bonuses. EVE Online has several implants (e.g.
+ * Eifyr 'Guns' series) and facility modules that reduce manufacturing time
+ * and/or material costs — these are character/facility-level, not rig-level.
+ *
+ * Bonuses are additive within their category and applied multiplicatively
+ * against the facility-derived totals:
+ * - `time_bonus_pct`: additional time reduction % (stacks with TE bonus).
+ * - `material_bonus`: additional ME multiplier (e.g. 0.99 = −1% materials,
+ * multiplicative with the facility ME bonus).
+ * - `cost_bonus_pct`: additional cost-index reduction % (additive with TE bonus).
+ *
+ * `None` means no implant/module configured — equivalent to zero bonuses.
+ */
+export type ImplantBonus = {
+  /**
+   * Additional manufacturing time reduction (percent, e.g. 4.0 = −4%).
+   * Applied as a multiplier on top of the facility TE bonus.
+   */
+  timeBonusPct: number;
+  /**
+   * Additional material efficiency multiplier (e.g. 0.99 = −1%).
+   * Applied multiplicatively with the facility ME bonus.
+   */
+  materialBonus: number;
+  /**
+   * Additional job-fee cost reduction (percent, e.g. 2.0 = −2%).
+   * Applied as an additional saving on the cost-index portion.
+   */
+  costBonusPct: number;
 };
 /**
  * Invention cost detail for the drill-down (T2 items).
@@ -225,6 +390,31 @@ export type ProfitBreakdown = {
   unitsProduced: number;
   materialCost: number;
   jobFee: number;
+  /**
+   * Manufacturing system cost index used for this row's facility jobs.
+   */
+  manufacturingCostIndex: number;
+  /**
+   * Total install cost (job fee) for manufacturing, in ISK.
+   */
+  manufacturingInstallCost: number;
+  /**
+   * Total manufacturing job time for this row, in seconds (all runs).
+   */
+  manufacturingTimeSeconds: number;
+  /**
+   * Reaction install cost (job fee) for the top-level step, in ISK.
+   */
+  reactionInstallCost: number;
+  /**
+   * Total reaction job time for this row, in seconds (all runs).
+   */
+  reactionTimeSeconds: number;
+  /**
+   * Whether the result is approximate (facility cost index or tax is None —
+   * e.g. wormhole space with a manual override).
+   */
+  approximate: boolean;
   /**
    * Amortized blueprint acquisition cost for this job (per-run cost × runs).
    */
@@ -385,7 +575,79 @@ export type ProfitParams = {
    * Broker fee fraction applied to revenue (when `include_sales_cost`).
    */
   brokerFee?: number;
+  /**
+   * Facility profiles for manufacturing and reaction steps. When `Some`,
+   * each build step selects its profile by activity (via
+   * [`FacilityProfiles::for_activity`]); when `None`, the flat
+   * `me_bonus`/`cost_bonus`/`system_cost_index`/`facility_tax` fields are
+   * used as-is (backward compatibility with the old single-structure API).
+   */
+  facilityProfiles?: FacilityProfiles | null;
+  /**
+   * Whether to ignore side products (reaction by-products) in the build vs.
+   * buy decision. When `true` (default), side products are not valued as
+   * additional revenue — only the main product's profit is computed.
+   */
+  ignoreSideProducts?: boolean;
+  /**
+   * Optional character implant/facility module bonuses (time, ME, cost).
+   * When `Some`, applied on top of the facility profile's bonuses.
+   */
+  implant: ImplantBonus | null;
+  /**
+   * Fallback ME (0..=10) applied to **component** build steps
+   * (`BuildStep.is_component == true`) when the component's blueprint is not
+   * in `owned_me` — lets the user set ONE ME for all components. Ignored for
+   * the top-level product (which uses `me`). 0 = no bonus.
+   */
+  componentMe?: number;
+  /**
+   * Fallback TE (0..=20) for component build steps when not owned — one value
+   * for all components. Ignored for the top-level product. 0 = no bonus.
+   */
+  componentTe?: number;
 };
+/**
+ * A known manufacturing rig type with its bonus description.
+ * A rig type surfaced to the Facilities rig selector.
+ */
+export type RigTypeInfo = {
+  typeId: number;
+  name: string;
+  /**
+   * `me` / `te` / `cost` — primary bonus column (groups the multiselect).
+   */
+  category: string;
+  tier: string;
+  /**
+   * Primary base bonus (display, %, 100% scale).
+   */
+  bonus: number;
+  /**
+   * Rig slot size: 1=Small, 2=Medium, 3=Large, 4=XL. A rig only fits a slot
+   * of its own size, so the UI only offers rigs with `rig_size ==
+   * structure.max_rig_size`.
+   */
+  rigSize: number;
+  /**
+   * Base (100%) reductions, in %: material / time / cost.
+   */
+  meBonus: number;
+  teBonus: number;
+  costBonus: number;
+  isT2: boolean;
+};
+/**
+ * Security tier of the system the facility sits in. Wormhole systems have
+ * no live cost index, so results there are marked approximate.
+ */
+export type SecurityTier = "highsec" | "lowsec" | "nullsec" | "wormhole";
+/**
+ * Upwell structure (or NPC station) type that hosts a manufacturing or
+ * reaction job. Drives the base ME/TE/cost-index multipliers.
+ */
+export type StructureType =
+  "npcStation" | "raitaru" | "azbel" | "sotiyo" | "athanor" | "tatara";
 
 /** tauri-specta globals **/
 

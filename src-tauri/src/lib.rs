@@ -308,6 +308,8 @@ pub fn run() {
             modules::production::commands::production_get_list,
             modules::production::commands::production_set_list,
             modules::production::commands::production_system_cost_index,
+            modules::production::commands::production_rigs,
+            modules::production::commands::production_rig_bonuses,
             modules::trading::commands::trading_scan,
             modules::trading::commands::trading_get_list,
             modules::trading::commands::trading_set_list,

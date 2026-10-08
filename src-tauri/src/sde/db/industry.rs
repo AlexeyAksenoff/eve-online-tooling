@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use super::super::types::{
     activity, BlueprintMaterial, BlueprintProduct, Decryptor, InventionData,
-    ManufacturableBlueprint, Recipe, ReprocessRecipe,
+    ManufacturableBlueprint, RawRig, Recipe, ReprocessRecipe,
 };
 use super::super::SdeError;
 use super::Sde;
@@ -469,6 +469,72 @@ impl Sde {
         })?;
         rows.collect::<Result<HashMap<_, _>, _>>()
             .map_err(Into::into)
+    }
+}
+
+/// Industry rig types for the Facilities rig selector, restricted to those
+/// that fit a rig slot of exactly `max_rig_size` (S=1, M=2, L=3, XL=4 — a rig
+/// only fits a slot of its own size, so no "cram an M-rig into an L-slot";
+/// this enforces the structure↔rigSize compatibility you specified).
+///
+/// `group_prefix` selects the rig family (and thus the facility/activity it
+/// applies to): `"Reactor Rig"` → Reactions (refinery/processing rigs that
+/// carry `RefRigMatBonus`/`RefRigTimeBonus`), `"Engineering Rig"` →
+/// Manufacturing (carry `EngRigMatBonus`/`EngRigTimeBonus`/`EngRigCostBonus`).
+/// Published rigs only. Bonus values are the **base** (100%) percentages
+/// straight from the SDE dogma attributes — the command layer security-scales
+/// them when the user selects rigs for a facility.
+impl Sde {
+    pub fn industry_rigs(
+        &self,
+        group_prefix: &str,
+        max_rig_size: i64,
+    ) -> Result<Vec<RawRig>, SdeError> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT t.typeID, t.typeName, t.groupID, g.groupName,
+               COALESCE((SELECT da.valueFloat FROM dgmTypeAttributes da
+                         WHERE da.typeID = t.typeID AND da.attributeID = 1547),
+                        (SELECT da.valueInt  FROM dgmTypeAttributes da
+                         WHERE da.typeID = t.typeID AND da.attributeID = 1547)) AS rigSize,
+               COALESCE((SELECT da.valueFloat FROM dgmTypeAttributes da
+                         WHERE da.typeID = t.typeID AND da.attributeID = 422),
+                        (SELECT da.valueInt  FROM dgmTypeAttributes da
+                         WHERE da.typeID = t.typeID AND da.attributeID = 422)) AS techLevel,
+               (SELECT da.valueFloat FROM dgmTypeAttributes da
+                         WHERE da.typeID = t.typeID AND da.attributeID = 2714) AS refMat,
+               (SELECT da.valueFloat FROM dgmTypeAttributes da
+                         WHERE da.typeID = t.typeID AND da.attributeID = 2713) AS refTime,
+               (SELECT da.valueFloat FROM dgmTypeAttributes da
+                         WHERE da.typeID = t.typeID AND da.attributeID = 2594) AS engMat,
+               (SELECT da.valueFloat FROM dgmTypeAttributes da
+                         WHERE da.typeID = t.typeID AND da.attributeID = 2593) AS engTime,
+               (SELECT da.valueFloat FROM dgmTypeAttributes da
+                         WHERE da.typeID = t.typeID AND da.attributeID = 2595) AS engCost
+            FROM invTypes t JOIN invGroups g ON g.groupID = t.groupID
+            WHERE t.published = 1
+              AND g.groupName LIKE ?1
+              AND COALESCE((SELECT da.valueFloat FROM dgmTypeAttributes da
+                            WHERE da.typeID = t.typeID AND da.attributeID = 1547),
+                           (SELECT da.valueInt  FROM dgmTypeAttributes da
+                            WHERE da.typeID = t.typeID AND da.attributeID = 1547)) = ?2
+            ORDER BY t.typeID"#,
+        )?;
+        let rows = stmt.query_map(params![format!("%{group_prefix}%"), max_rig_size], |r| {
+            Ok(RawRig {
+                type_id: r.get(0)?,
+                name: r.get(1)?,
+                group_id: r.get(2)?,
+                group_name: r.get(3)?,
+                rig_size: r.get::<_, Option<f64>>(4)?.unwrap_or(0.0) as i64,
+                tech_level: r.get::<_, Option<f64>>(5)?.unwrap_or(1.0),
+                ref_mat: r.get::<_, Option<f64>>(6)?.unwrap_or(0.0),
+                ref_time: r.get::<_, Option<f64>>(7)?.unwrap_or(0.0),
+                eng_mat: r.get::<_, Option<f64>>(8)?.unwrap_or(0.0),
+                eng_time: r.get::<_, Option<f64>>(9)?.unwrap_or(0.0),
+                eng_cost: r.get::<_, Option<f64>>(10)?.unwrap_or(0.0),
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 }
 
