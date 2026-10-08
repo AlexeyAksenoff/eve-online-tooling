@@ -74,7 +74,7 @@ fn resolve_input(
                 } else {
                     Activity::Manufacturing
                 };
-                                Sourcing::Build(Box::new(BuildStep {
+                Sourcing::Build(Box::new(BuildStep {
                     activity,
                     blueprint_type_id: recipe.blueprint_type_id,
                     product_type_id: type_id,
@@ -82,7 +82,7 @@ fn resolve_input(
                     product_per_run: recipe.product_quantity,
                     inputs,
                     invention: None,
-                    is_component: true,  // All sub-builds in resolve_input are components
+                    is_component: true, // All sub-builds in resolve_input are components
                 }))
             }
             None => Sourcing::Buy,
@@ -379,7 +379,7 @@ pub async fn production_profit(
         include_sales_cost: params.include_sales_cost,
         sales_tax: params.sales_tax,
         broker_fee: params.broker_fee,
-                                facility_profiles: params.facility_profiles.clone(),
+        facility_profiles: params.facility_profiles.clone(),
         implant: params.implant.clone(),
         owned_me: params.owned_me.clone(),
         owned_te: params.owned_te.clone(),
@@ -406,7 +406,7 @@ pub async fn production_profit(
     // Industry (−3%/lvl) × structure TE bonus.
     let l = params.time_skill.clamp(0, 5) as f64;
     let time_skill_mult = (1.0 - 0.04 * l) * (1.0 - 0.03 * l);
-        // Profile-aware TE bonus: from the facility profile if configured, else
+    // Profile-aware TE bonus: from the facility profile if configured, else
     // the flat `structure_te_pct` (backward compat). Uses the manufacturing
     // profile (top-level product is never a component).
     let mfg_te_bonus_pct = config.te_bonus_pct_for(super::engine::Activity::Manufacturing);
@@ -434,8 +434,8 @@ pub async fn production_profit(
                     .get(&step.blueprint_type_id)
                     .copied()
                     .unwrap_or(params.te);
-                                let te_bonus = config.te_bonus_pct_for_step(step);
-                                let role_bonus = config.role_bonus_time_for_step(step);
+                let te_bonus = config.te_bonus_pct_for_step(step);
+                let role_bonus = config.role_bonus_time_for_step(step);
                 // Reaction time = base × runs × (1 − blueprint_TE) × (1 − facility_TE) × (1 − role_bonus)
                 total += base as f64
                     * runs as f64
@@ -615,131 +615,197 @@ pub fn production_set_list(
 // --- Rig bonus computation (from well-known rig type IDs) ---
 
 /// A known manufacturing rig type with its bonus description.
+/// A rig type surfaced to the Facilities rig selector.
 #[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct RigTypeInfo {
     pub type_id: i64,
     pub name: String,
+    /// `me` / `te` / `cost` — primary bonus column (groups the multiselect).
     pub category: String,
     pub tier: String,
+    /// Primary base bonus (display, %, 100% scale).
     pub bonus: f64,
+    /// Rig slot size: 1=Small, 2=Medium, 3=Large, 4=XL. A rig only fits a slot
+    /// of its own size, so the UI only offers rigs with `rig_size ==
+    /// structure.max_rig_size`.
+    pub rig_size: i64,
+    /// Base (100%) reductions, in %: material / time / cost.
+    pub me_bonus: f64,
+    pub te_bonus: f64,
+    pub cost_bonus: f64,
+    pub is_t2: bool,
 }
 
-/// All known manufacturing rig types (for the UI checkbox list). Type IDs and
-/// bonus values are well-known EVE constants (see `rig_bonus_lookup`).
+/// All industry rigs for one facility type, readable right now. Rigs are
+/// filtered to those whose slot size exactly matches `max_rig_size` (the size
+/// of the slot the chosen structure exposes — a rig only fits a slot of its
+/// own size). `"reaction"` → refinery/reactor rigs (`RefRig*` dogma attrs,
+/// reduce reactant usage & reaction time); `"manufacturing"`/`"components"` →
+/// engineering rigs (`EngRig*` attrs). Bonuses are the base (un-scaled)
+/// percentages; [`production_rig_bonuses`] security-scales them on selection.
 #[tauri::command]
 #[specta::specta]
-pub fn production_manufacturing_rigs() -> Vec<RigTypeInfo> {
-    use super::engine::{rig_bonus_lookup, RigBonus};
-    let ids = [
-        1955, 1956, 1957, 1958, 1959, 1960, 1961, 1962, 1963, 1964, 1965, 1966,
-    ];
-    ids.iter()
-        .filter_map(|&id| {
-            let RigBonus {
-                me_pct,
-                te_pct,
-                cost_pct,
-                is_t2,
-            } = rig_bonus_lookup(id)?;
-            let (category, bonus) = if me_pct > 0.0 {
-                ("me", me_pct)
-            } else if te_pct > 0.0 {
-                ("te", te_pct)
+pub fn production_rigs(
+    app: tauri::AppHandle,
+    facility_type: super::engine::FacilityType,
+    max_rig_size: i64,
+) -> Result<Vec<RigTypeInfo>, AppError> {
+    let sde = crate::sde::open_from_app(&app)?;
+    let group_prefix = match facility_type {
+        super::engine::FacilityType::Reaction => "Reactor Rig",
+        super::engine::FacilityType::Manufacturing | super::engine::FacilityType::Components => {
+            "Engineering Rig"
+        }
+    };
+    let rigs = sde
+        .industry_rigs(group_prefix, max_rig_size)
+        .map_err(|e| e.to_string())?;
+    Ok(rigs
+        .into_iter()
+        .map(|r| {
+            // Base (100%) reductions as absolute % — a rig is either refinery
+            // (RefRig*) or engineering (EngRig*); only one family is non-zero.
+            let me = r.ref_mat.abs() + r.eng_mat.abs();
+            let te = r.ref_time.abs() + r.eng_time.abs();
+            let cost = r.eng_cost.abs();
+            let (category, bonus) = if me > 0.0 {
+                ("me", me)
+            } else if te > 0.0 {
+                ("te", te)
             } else {
-                ("cost", cost_pct)
+                ("cost", cost)
             };
-            Some(RigTypeInfo {
-                type_id: id,
-                name: rig_type_name(id),
+            RigTypeInfo {
+                type_id: r.type_id,
+                name: r.name,
                 category: category.to_string(),
-                tier: if is_t2 { "T2" } else { "T1" }.to_string(),
+                tier: if r.tech_level >= 2.0 { "T2" } else { "T1" }.to_string(),
                 bonus,
-            })
+                rig_size: r.rig_size,
+                me_bonus: me,
+                te_bonus: te,
+                cost_bonus: cost,
+                is_t2: r.tech_level >= 2.0,
+            }
         })
-            .collect()
+        .collect())
 }
 
-/// All known processing (reaction) rig types (for the UI checkbox list on the
-/// Facilities → Reaction tab). Same well-known constants as manufacturing rigs,
-/// just the processing rig type IDs (1967-1978).
-#[tauri::command]
-#[specta::specta]
-pub fn production_processing_rigs() -> Vec<RigTypeInfo> {
-    use super::engine::{rig_bonus_lookup, RigBonus};
-    let ids = [
-        1967, 1968, 1969, 1970, 1971, 1972, 1973, 1974, 1975, 1976, 1977, 1978,
-    ];
-    ids.iter()
-        .filter_map(|&id| {
-            let RigBonus {
-                me_pct,
-                te_pct,
-                cost_pct,
-                is_t2,
-            } = rig_bonus_lookup(id)?;
-            let (category, bonus) = if me_pct > 0.0 {
-                ("me", me_pct)
-            } else if te_pct > 0.0 {
-                ("te", te_pct)
-            } else {
-                ("cost", cost_pct)
-            };
-            Some(RigTypeInfo {
-                type_id: id,
-                name: rig_type_name(id),
-                category: category.to_string(),
-                tier: if is_t2 { "T2" } else { "T1" }.to_string(),
-                bonus,
-            })
-        })
-        .collect()
+/// Base + security-scaled bonus for a single Standup rig, read from its SDE
+/// dogma attributes (those not in the legacy 1955-1978 table). Returns
+/// `(mePct, tePct, costPct)` — absolute reduction percentages. `None` when the
+/// type isn't an industry rig.
+fn sde_rig_bonus(
+    sde: &Sde,
+    type_id: i64,
+    security_tier: super::engine::SecurityTier,
+) -> Option<(f64, f64, f64)> {
+    let attrs = sde.type_attributes_raw(type_id).ok()?;
+    rig_bonus_from_attrs(&attrs, security_tier)
 }
 
-/// Human-readable name for a known rig type ID (hardcoded since the rig type
-/// names are stable and we don't want a full SDE query for a dropdown list).
-fn rig_type_name(id: i64) -> String {
-    match id {
-        1955 => "Medium Manufacturing Time Rig I",
-        1956 => "Medium Manufacturing Time Rig II",
-        1957 => "Medium Manufacturing Material Rig I",
-        1958 => "Medium Manufacturing Material Rig II",
-        1959 => "Medium Manufacturing Cost Rig I",
-        1960 => "Medium Manufacturing Cost Rig II",
-        1961 => "Small Manufacturing Time Rig I",
-        1962 => "Small Manufacturing Time Rig II",
-        1963 => "Small Manufacturing Material Rig I",
-        1964 => "Small Manufacturing Material Rig II",
-        1965 => "Small Manufacturing Cost Rig I",
-                1966 => "Small Manufacturing Cost Rig II",
-        // Processing/Reaction rigs
-        1967 => "Medium Processing Time Rig I",
-        1968 => "Medium Processing Time Rig II",
-        1969 => "Medium Processing Material Rig I",
-        1970 => "Medium Processing Material Rig II",
-        1971 => "Medium Processing Cost Rig I",
-        1972 => "Medium Processing Cost Rig II",
-        1973 => "Small Processing Time Rig I",
-        1974 => "Small Processing Time Rig II",
-        1975 => "Small Processing Material Rig I",
-        1976 => "Small Processing Material Rig II",
-        1977 => "Small Processing Cost Rig I",
-        1978 => "Small Processing Cost Rig II",
-        _ => "Unknown rig",
+/// Pure core of [`sde_rig_bonus`]: map a rig's dogma attribute bag to its
+/// base + security-scaled `(mePct, tePct, costPct)`. Returns `None` when the
+/// type carries no industry-rig bonus attributes (i.e. it isn't a Standup
+/// industry rig). Factored out so the refinery/engineering rig math is
+/// unit-testable without a full SDE connection.
+fn rig_bonus_from_attrs(
+    attrs: &[(i64, f64)],
+    security_tier: super::engine::SecurityTier,
+) -> Option<(f64, f64, f64)> {
+    let a = |id: i64| -> f64 {
+        attrs
+            .iter()
+            .find(|(k, _)| *k == id)
+            .map(|(_, v)| *v)
+            .unwrap_or(0.0)
+    };
+    // Refinery reactor rigs: RefRigMatBonus(2714)/RefRigTimeBonus(2713).
+    // Engineering rigs: EngRigMatBonus(2594)/EngRigTimeBonus(2593)/EngRigCostBonus(2595).
+    let me = (-a(2714)) + (-a(2594));
+    let te = (-a(2713)) + (-a(2593));
+    let cost = -a(2595);
+    if me == 0.0 && te == 0.0 && cost == 0.0 {
+        return None;
     }
-    .to_string()
+    let mult = rig_security_multiplier(attrs, security_tier);
+    Some((me * mult, te * mult, cost * mult))
 }
 
-/// Resolve a set of rig type IDs + security tier into `(meBonus, teBonusPct,
-/// costBonusPct)` using the well-known rig bonus table. The frontend calls
-/// this when the user toggles rigs in the Facilities tab.
+/// Security-tier effectiveness multiplier for a Standup rig, read from the rig's
+/// own dogma attributes (`hiSecModifier`/`lowSecModifier`/`nullSecModifier`,
+/// ids 2355-2357) — NOT the legacy `t2_rig_security_multiplier` (which applies
+/// only to the 1955-1978 rigs). `disallowInHighSec` (1970) → 0 in highsec.
+/// Wormhole is treated as nullsec (security ≈ 0), matching the user-verified
+/// refinery-rig behaviour (low/null/wh = 1.0/1.1/1.1). Absent attrs → 1.0.
+fn rig_security_multiplier(
+    attrs: &[(i64, f64)],
+    security_tier: super::engine::SecurityTier,
+) -> f64 {
+    let a = |id: i64| -> f64 {
+        attrs
+            .iter()
+            .find(|(k, _)| *k == id)
+            .map(|(_, v)| *v)
+            .unwrap_or(1.0)
+    };
+    let disallow_highsec = attrs.iter().any(|(k, v)| *k == 1970 && *v != 0.0);
+    match security_tier {
+        super::engine::SecurityTier::Highsec => {
+            if disallow_highsec {
+                0.0
+            } else {
+                a(2355)
+            }
+        }
+        super::engine::SecurityTier::Lowsec => a(2356),
+        super::engine::SecurityTier::Nullsec => a(2357),
+        super::engine::SecurityTier::Wormhole => a(2357),
+    }
+}
+
+/// Resolve selected rig type IDs + facility security tier into
+/// `(meBonus, teBonusPct, costBonusPct)` — same contract as the engine's
+/// `rig_bonuses_from_ids`. Legacy rigs (1955-1978) use the built-in bonus
+/// table; any other Standup rig has its bonus read from the SDE dogma attrs
+/// and security-scaled by the rig's own modifiers (see [`sde_rig_bonus`]).
 #[tauri::command]
 #[specta::specta]
 pub fn production_rig_bonuses(
+    app: tauri::AppHandle,
     rig_type_ids: Vec<i64>,
     security_tier: super::engine::SecurityTier,
-) -> (f64, f64, f64) {
-    super::engine::rig_bonuses_from_ids(&rig_type_ids, security_tier)
+) -> Result<(f64, f64, f64), AppError> {
+    // Standup rigs need the SDE. If it isn't installed yet, fall back to the
+    // legacy table only (new rigs → no bonus). The app requires the SDE for
+    // any real calculation, so this only fires before first run.
+    let sde = crate::sde::open_from_app(&app).ok();
+    let mut me_pct = 0.0_f64;
+    let mut te_pct = 0.0_f64;
+    let mut cost_pct = 0.0_f64;
+    for id in &rig_type_ids {
+        if let Some(b) = super::engine::rig_bonus_lookup(*id) {
+            // Legacy rigs: T2 rigs scale by the classic security multiplier.
+            let mult = if b.is_t2 {
+                super::engine::t2_rig_security_multiplier(security_tier)
+            } else {
+                1.0
+            };
+            me_pct += b.me_pct * mult;
+            te_pct += b.te_pct * mult;
+            cost_pct += b.cost_pct * mult;
+        } else if let Some((m, t, c)) = sde
+            .as_ref()
+            .and_then(|s| sde_rig_bonus(s, *id, security_tier))
+        {
+            me_pct += m;
+            te_pct += t;
+            cost_pct += c;
+        }
+        // Unknown id → no bonus, preserving prior behaviour.
+    }
+    Ok((1.0 - me_pct / 100.0, te_pct, cost_pct))
 }
 
 // --- Live per-system industry cost index (ESI /industry/systems/) ---
@@ -818,8 +884,7 @@ pub fn specta_commands() -> tauri_specta::Commands<tauri::Wry> {
         production_get_list,
         production_set_list,
         production_system_cost_index,
-                production_manufacturing_rigs,
-        production_processing_rigs,
+        production_rigs,
         production_rig_bonuses,
     ]
 }
@@ -1194,5 +1259,55 @@ mod reprice_tests {
         empty.units_produced = 0;
         reprice_product(&mut empty, 5.0, "Jita", 0.0);
         assert_eq!(empty.profit_per_unit, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod rig_bonus_tests {
+    use super::*;
+    use crate::modules::production::engine::SecurityTier;
+
+    /// Dogma attribute bag for `Standup L-Set Reactor Efficiency II`
+    /// (typeID 46497), read from the live SDE. RefRigMatBonus=-2.4,
+    /// RefRigTimeBonus=-24, disallowInHighSec, lowSec=1.0, nullSec=1.1.
+    fn reactor_efficiency_ii() -> Vec<(i64, f64)> {
+        vec![
+            (2713, -24.0),
+            (2714, -2.4),
+            (1970, 1.0),
+            (2355, 1.0),
+            (2356, 1.0),
+            (2357, 1.1),
+            (2358, 1.0),
+        ]
+    }
+
+    #[test]
+    fn refinery_rig_security_scaling_low_null_wh() {
+        let a = reactor_efficiency_ii();
+        // User-verified: hiSec disallowed, low=1.0, null/wh=1.1.
+        assert_eq!(rig_security_multiplier(&a, SecurityTier::Highsec), 0.0);
+        assert_eq!(rig_security_multiplier(&a, SecurityTier::Lowsec), 1.0);
+        assert_eq!(rig_security_multiplier(&a, SecurityTier::Nullsec), 1.1);
+        assert_eq!(rig_security_multiplier(&a, SecurityTier::Wormhole), 1.1);
+    }
+
+    #[test]
+    fn standup_l_set_reactor_efficiency_ii_bonus() {
+        // base 2.4% mat / 24% time; nullsec ×1.1 → 2.64 / 26.4; lowsec ×1.0 → 2.4 / 24.
+        let a = reactor_efficiency_ii();
+        let (me, te, cost) = rig_bonus_from_attrs(&a, SecurityTier::Nullsec).unwrap();
+        assert!((me - 2.64).abs() < 1e-9, "mat {me}");
+        assert!((te - 26.4).abs() < 1e-9, "time {te}");
+        assert!(cost.abs() < 1e-9);
+        let (me_lo, te_lo, _) = rig_bonus_from_attrs(&a, SecurityTier::Lowsec).unwrap();
+        assert!((me_lo - 2.4).abs() < 1e-9);
+        assert!((te_lo - 24.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn non_industry_rig_yields_no_bonus() {
+        // No RefRig*/EngRig* attrs (e.g. an ECM module) → None.
+        assert!(rig_bonus_from_attrs(&[(2356, 1.0)], SecurityTier::Nullsec).is_none());
     }
 }

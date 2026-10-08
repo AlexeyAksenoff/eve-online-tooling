@@ -333,3 +333,34 @@ pub struct SystemInfo {
     pub region_id: i64,
     pub region_name: String,
 }
+
+/// A rig type read from the SDE for the Facilities rig selector, carrying its
+/// base (100%) industry bonuses and the rig-size/security attributes needed to
+/// validate fitting and scale the bonus. `RawRig` is the raw SDE row form; the
+/// production command layer maps it to its public `RigTypeInfo`.
+///
+/// Refinery/reactor rigs carry `RefRig*` values (apply to Reactions);
+/// engineering rigs carry `EngRig*` values (apply to Manufacturing).
+#[derive(Debug, Clone)]
+pub struct RawRig {
+    pub type_id: i64,
+    pub name: String,
+    #[allow(dead_code)]
+    pub group_id: i64,
+    #[allow(dead_code)]
+    pub group_name: String,
+    /// Rig slot size this rig requires: 1=Small, 2=Medium, 3=Large, 4=XL.
+    pub rig_size: i64,
+    /// 1.0 = T1, 2.0 = T2.
+    pub tech_level: f64,
+    /// `RefRigMatBonus` (2714) — refinery material/reactant reduction (e.g. -2.4).
+    pub ref_mat: f64,
+    /// `RefRigTimeBonus` (2713) — refinery time reduction (e.g. -24.0).
+    pub ref_time: f64,
+    /// `EngRigMatBonus` (2594) — engineering material reduction.
+    pub eng_mat: f64,
+    /// `EngRigTimeBonus` (2593) — engineering time reduction.
+    pub eng_time: f64,
+    /// `EngRigCostBonus` (2595) — engineering cost-index reduction.
+    pub eng_cost: f64,
+}

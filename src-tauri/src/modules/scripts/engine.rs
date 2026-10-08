@@ -507,7 +507,7 @@ mod tests {
         assert!(out.error.unwrap().contains("timed out"));
     }
 
-        #[test]
+    #[test]
     #[ignore] // flaky on slow (e.g. macOS debug) runners: the 10s exec timeout can elide the memory-limit error this asserts on. Scripts module, unrelated to production.
     fn rhai_allocation_bomb_is_stopped_by_the_memory_watchdog() {
         // #815: an unbounded loop that allocates every iteration and never

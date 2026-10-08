@@ -6,6 +6,7 @@ import {
   type MaterialLine,
   type PriceBasis,
   type ProfitBreakdown,
+  type FacilityType,
   type ProfitParams,
   type RigTypeInfo,
   type SecurityTier,
@@ -44,22 +45,26 @@ export async function productionSystemCostIndex(
   return unwrapCommand(await commands.productionSystemCostIndex(systemId));
 }
 
-/** All known manufacturing rig types with their bonuses (for the Facilities
- *  tab's rig selector). */
-export async function productionManufacturingRigs(): Promise<RigTypeInfo[]> {
-  return commands.productionManufacturingRigs();
+/** All industry rigs for one facility type, filtered to those whose slot size
+ *  exactly matches `maxRigSize` (the size of the slot the chosen structure
+ *  provides). `facilityType` selects refinery/reactor rigs (Reactions) vs.
+ *  engineering rigs (Manufacturing/Components). */
+export async function productionRigs(
+  facilityType: FacilityType,
+  maxRigSize: number,
+): Promise<RigTypeInfo[]> {
+  return unwrapCommand(await commands.productionRigs(facilityType, maxRigSize));
 }
 
-/** All known processing (reaction) rig types with their bonus descriptions. */
-export async function productionProcessingRigs(): Promise<RigTypeInfo[]> {
-  return commands.productionProcessingRigs();
-}
-
-/** Compute rig bonuses from a set of selected rig type IDs + security tier.
- *  Returns `[meBonus, teBonusPct, costBonusPct]`. */
+/** Compute security-scaled rig bonuses for the selected type IDs + facility
+ *  security tier. Returns `[meBonus, teBonusPct, costBonusPct]`. Legacy rigs
+ *  (1955-1978) use the built-in table; Standup rigs (M/L/XL-Set) are read
+ *  from the SDE and scaled by the rig's own security modifiers. */
 export async function productionRigBonuses(
   rigTypeIds: number[],
   securityTier: SecurityTier,
 ): Promise<[number, number, number]> {
-  return commands.productionRigBonuses(rigTypeIds, securityTier);
+  return unwrapCommand(
+    await commands.productionRigBonuses(rigTypeIds, securityTier),
+  );
 }

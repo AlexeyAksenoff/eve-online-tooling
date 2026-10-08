@@ -24,6 +24,6 @@ pub(crate) use commands::BASE_T2_ME;
 /// layer and future consumers (e.g. side-product handling).
 #[allow(unused_imports)]
 pub(crate) use engine::{
-        evaluate, manufacturing_step, required_quantity, Activity, FacilityProfile, FacilityProfiles,
+    evaluate, manufacturing_step, required_quantity, Activity, FacilityProfile, FacilityProfiles,
     FacilityType, ImplantBonus, ProfitConfig, SecurityTier, StructureType,
 };

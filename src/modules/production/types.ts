@@ -102,6 +102,19 @@ export const FACILITY_STRUCTURES: Record<
   },
 };
 
+/** Max rig slot size each structure can host (S=1, M=2, L=3, XL=4) — from the
+ * SDE `rigSize` attribute (1547) on the structure type. A rig only fits a slot
+ * of its own size, so the rig picker offers only `rig.rigSize == maxRigSize`.
+ * 0 = no rig slots (NPC station). */
+export const STRUCTURE_MAX_RIG_SIZE: Record<FacilityStructureKey, number> = {
+  npcStation: 0,
+  raitaru: 2,
+  azbel: 3,
+  sotiyo: 4,
+  athanor: 2,
+  tatara: 3,
+};
+
 export type SecurityTierKey = "highsec" | "lowsec" | "nullsec" | "wormhole";
 
 export const SECURITY_TIERS: Record<

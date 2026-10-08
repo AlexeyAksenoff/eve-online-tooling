@@ -1,4 +1,3 @@
-import { useQuery } from "@tanstack/react-query";
 import { FeesFromCharacter } from "../../components/FeesFromCharacter";
 import {
   RegionSelect,
@@ -7,6 +6,7 @@ import {
 import { CheckboxGroup, Field } from "../../components/forms";
 import { BasisSelect, Num, Tabs } from "./components";
 import { CostIndexField } from "./CostIndexField";
+import { MultiCombo } from "./MultiCombo";
 import {
   applyRigBonuses,
   exportFacilityProfiles,
@@ -16,18 +16,13 @@ import {
 } from "./facilityProfiles";
 import {
   FACILITY_STRUCTURES,
+  STRUCTURE_MAX_RIG_SIZE,
   SECURITY_TIERS,
   type FacilityProfile,
   type FacilityStructureKey,
   type SecurityTierKey,
 } from "./types";
 import { toggle } from "../../lib/sets";
-import {
-  productionManufacturingRigs,
-  productionProcessingRigs,
-  type RigTypeInfo,
-} from "../../lib/api/production";
-import { type FacilityType } from "./types";
 import type { WorkbenchState } from "./workbenchTypes";
 
 export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
@@ -490,7 +485,7 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
 
   return (
     <div className="space-y-3">
-      {/* Slot switcher: Manufacturing | Reaction */}
+      {/* Slot switcher: Manufacturing | Components | Reaction */}
       <div className="flex gap-2">
         <button
           onClick={() => setSelectedProfile("manufacturing")}
@@ -503,16 +498,6 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
           Manufacturing
         </button>
         <button
-          onClick={() => setSelectedProfile("reaction")}
-          className={`rounded px-3 py-1.5 text-sm ${
-            selectedProfile === "reaction"
-              ? "bg-zinc-700 text-zinc-100"
-              : "text-zinc-400 hover:text-zinc-200"
-          }`}
-        >
-          Reaction
-        </button>
-        <button
           onClick={() => setSelectedProfile("components")}
           className={`rounded px-3 py-1.5 text-sm ${
             selectedProfile === "components"
@@ -521,6 +506,16 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
           }`}
         >
           Components
+        </button>
+        <button
+          onClick={() => setSelectedProfile("reaction")}
+          className={`rounded px-3 py-1.5 text-sm ${
+            selectedProfile === "reaction"
+              ? "bg-zinc-700 text-zinc-100"
+              : "text-zinc-400 hover:text-zinc-200"
+          }`}
+        >
+          Reaction
         </button>
       </div>
 
@@ -568,10 +563,15 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
         </select>
       </Field>
 
-      {/* Rig selector — checkboxes from SDE-backed rig type list */}
+      {/* Rig selector — SDE-backed multiselect. Only rigs whose slot size
+       * exactly matches the chosen structure's rig slot are offered
+       * (rig.rigSize == maxRigSize), so e.g. an L‑set won't show on an
+       * Athanor. Selecting toggles the profile's rigTypeIds; `update` runs
+       * applyRigBonuses → production_rig_bonuses to recompute ME/TE/cost. */}
       <Field label="Rig modules">
-        <RigSelector
+        <MultiCombo
           facilityType={profile.facilityType}
+          maxRigSize={STRUCTURE_MAX_RIG_SIZE[profile.structure]}
           selectedIds={profile.rigTypeIds ?? []}
           onChange={(newIds) => {
             void update({ rigTypeIds: newIds });
@@ -579,31 +579,13 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
         />
       </Field>
 
-      {/* Cost index: live-fill from a build system, or a manual fraction.
-          `null` = wormhole (no live index). The field auto-fills from ESI
-          `/industry/systems/` like the rest of the app; tax rate has no live
-          source so it stays a manual override. Cost-index changes don't affect
-          rig bonuses, so set the field directly (no applyRigBonuses roundtrip). */}
-      <Field label="Cost index">
-        <CostIndexField
-          value={profile.systemCostIndex}
-          onChange={(ci) =>
-            setFacilityProfiles({
-              ...facilityProfiles,
-              [selectedProfile]: { ...profile, systemCostIndex: ci },
-            })
-          }
-          systemId={profile.systemId}
-          onSystemChange={(id) =>
-            setFacilityProfiles({
-              ...facilityProfiles,
-              [selectedProfile]: { ...profile, systemId: id },
-            })
-          }
-        />
-      </Field>
-
-      <Field label="Tax rate (fraction)">
+      {/* Tax rate (facility/structure tax, 0–1 fraction, manual override).
+          The 4% CCP SCC surcharge on job fees is applied separately in the
+          engine (scc_surcharge) — do NOT enter it here. */}
+      <Field
+        label="Tax rate (fraction, 0–1)"
+        title="Facility/structure tax rate as a 0–1 fraction, applied to the job fee (EIV × tax). The 4% CCP SCC surcharge is added separately by the engine — do not enter it here. 0.00 for a player-owned structure (tax set by the corp)."
+      >
         <input
           type="number"
           value={profile.taxRate ?? ""}
@@ -624,8 +606,38 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
         />
       </Field>
 
+      {/* Cost index: live-fill from a build system, or a manual fraction.
+          `null` = wormhole (no live index). The field auto-fills from ESI
+          `/industry/systems/` like the rest of the app. Each facility type
+          keeps its OWN system cost index, so a reaction facility can sit in a
+          different system from the manufacturing one. */}
+      <Field
+        label="Cost index (fraction, from system)"
+        title="System cost index (0–1) from ESI /industry/systems/ for the chosen build system. Each facility (manufacturing / reaction / components) keeps its own index — pick a different system per facility if your structures live in different systems."
+      >
+        <CostIndexField
+          value={profile.systemCostIndex}
+          onChange={(ci) =>
+            setFacilityProfiles({
+              ...facilityProfiles,
+              [selectedProfile]: { ...profile, systemCostIndex: ci },
+            })
+          }
+          systemId={profile.systemId}
+          onSystemChange={(id) =>
+            setFacilityProfiles({
+              ...facilityProfiles,
+              [selectedProfile]: { ...profile, systemId: id },
+            })
+          }
+        />
+      </Field>
+
       {/* Implant/module bonuses */}
-      <Field label="Implant / module bonuses">
+      <Field
+        label="Implant / module bonuses"
+        title="Per-character bonuses (implants like Eifyr 'Guns', industry cores), applied ON TOP of facility+rig bonuses — ME is multiplicative with facility ME, TE/Cost additive. Does NOT duplicate rig bonuses: rigs = facility level, this = character level."
+      >
         <div className="space-y-2 text-sm">
           <div className="grid grid-cols-3 gap-2">
             <div>
@@ -735,89 +747,6 @@ function FacilityProfilePanel({ wb }: { wb: WorkbenchState }) {
           />
         </label>
       </div>
-    </div>
-  );
-}
-
-/** Checkbox list of rig types, grouped by category (ME / TE / Cost).
- *  Fetched from the backend: `productionManufacturingRigs` for
- *  manufacturing/components facilities, `productionProcessingRigs` for
- *  reaction facilities. When a rig is toggled, `onChange` fires with
- *  the updated `typeId[]` list. */
-function RigSelector({
-  facilityType,
-  selectedIds,
-  onChange,
-}: {
-  facilityType: FacilityType;
-  selectedIds: number[];
-  onChange: (ids: number[]) => void;
-}) {
-  const { data: rigs } = useQuery({
-    queryKey: ["production", `${facilityType}-rigs`],
-    queryFn:
-      facilityType === "reaction"
-        ? productionProcessingRigs
-        : productionManufacturingRigs,
-    staleTime: Infinity,
-  });
-
-  if (!rigs) {
-    return <div className="text-xs text-zinc-500">Loading rigs…</div>;
-  }
-
-  const byCat: Record<string, RigTypeInfo[]> = {};
-  for (const r of rigs) {
-    (byCat[r.category] ??= []).push(r);
-  }
-
-  const selected = new Set(selectedIds);
-
-  return (
-    <div className="space-y-2 text-sm">
-      {(["me", "te", "cost"] as const).map((cat) => {
-        const items = byCat[cat];
-        if (!items?.length) return null;
-        const label = { me: "Material (ME)", te: "Time (TE)", cost: "Cost" }[
-          cat
-        ];
-        return (
-          <div key={cat}>
-            <div className="mb-1 text-xs font-medium text-zinc-400">
-              {label}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {items.map((r) => (
-                <label
-                  key={r.typeId}
-                  className="flex items-center gap-1.5 text-xs"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected.has(r.typeId)}
-                    onChange={(e) => {
-                      const ids = e.target.checked
-                        ? [...selectedIds, r.typeId]
-                        : selectedIds.filter((id) => id !== r.typeId);
-                      onChange(ids);
-                    }}
-                    className="h-3 w-3 rounded border-zinc-600 bg-zinc-800 text-indigo-600"
-                  />
-                  <span
-                    className={
-                      r.tier === "T2" ? "text-amber-300" : "text-zinc-300"
-                    }
-                  >
-                    {r.tier}:
-                  </span>
-                  <span className="text-zinc-200">{r.name}</span>
-                  <span className="text-zinc-500">(+{r.bonus}%)</span>
-                </label>
-              ))}
-            </div>
-          </div>
-        );
-      })}
     </div>
   );
 }
