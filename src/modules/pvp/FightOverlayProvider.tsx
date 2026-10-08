@@ -39,13 +39,23 @@ export function isCombatTick(t: DpsTick): boolean {
 
 /** Overlay tick-buffer reducer: begin on first combat, keep appending while the
  *  fight is live (capped at 120, incl. the final wind-down-to-zero tick), then
- *  freeze once combat ends — and start a fresh buffer when a new fight begins,
- *  so fights aren't mixed. Exported for tests. */
+ *  freeze once combat ends — and **stay** frozen, no matter what arrives next,
+ *  until the caller explicitly clears the buffer (the panel's Dismiss button).
+ *  Earlier this resumed into a brand-new one-tick buffer the moment any
+ *  activity followed an idle tick, which silently threw away everything
+ *  collected so far (the "Attackers"/"My weapons" columns going empty mid- or
+ *  post-fight, #950) — a stray tick of quiet (common between volleys) was
+ *  enough to trigger it. Now only Dismiss (or disabling the overlay) resets
+ *  the buffer, so a fresh fight only ever starts from a deliberately-cleared
+ *  slate. Exported for tests. */
 export function nextFightTicks(prev: DpsTick[], tick: DpsTick): DpsTick[] {
-  const active = isCombatTick(tick);
-  if (prev.length === 0) return active ? [tick] : prev;
-  // Frozen (last tick idle): resume fresh only when new combat starts.
-  if (!isCombatTick(prev[prev.length - 1])) return active ? [tick] : prev;
+  if (prev.length === 0) {
+    return isCombatTick(tick) ? [tick] : prev;
+  }
+  // Already frozen: stays exactly as-is regardless of what this tick shows.
+  if (!isCombatTick(prev[prev.length - 1])) return prev;
+  // Still live (or this is the final idle tick that freezes it): append,
+  // capped at the last 120 (~60s at the 500ms tick rate).
   return [...prev, tick].slice(-120);
 }
 
@@ -701,7 +711,10 @@ export function FightOverlayProvider({ children }: { children: ReactNode }) {
               autoFit && selectedFitId == null ? autoFit.name : undefined
             }
             droneReminder={droneReminder}
-            onDismiss={() => setFightOpen(false)}
+            onDismiss={() => {
+              setFightOpen(false);
+              setFightTicks([]);
+            }}
           />
         )
       )}
