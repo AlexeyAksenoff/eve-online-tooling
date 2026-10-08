@@ -20,6 +20,12 @@ const JITA_STATION_ID: i64 = 60003760;
 /// Player structures (citadels etc.) use ids at/above this.
 const STRUCTURE_ID_MIN: i64 = 1_000_000_000_000;
 
+/// ESI scope required to resolve player-structure names via
+/// GET /universe/structures/{id}/. Optional — when absent the assets view
+/// falls back to "Structure {id}". Must be enabled on the EVE developer
+/// application registration and the character must have re-logged in.
+const STRUCTURES_SCOPE: &str = "esi-universe_structures.read_structures.v1";
+
 /// Valuation basis for one type: the location-local weighted average when the
 /// bulk path supplied one, else ESI's global average, else the Jita sell price
 /// (realistic percentile, then order-book min) (#776).
@@ -424,6 +430,8 @@ pub async fn assets_load(
     // per structure, issued concurrently. A 403 (structure not accessible to
     // the character) or a not-logged-in character leaves the entry absent and
     // the caller falls through to the generic fallback label.
+    // Skip entirely when the character's token lacks the
+    // esi-universe_structures scope — no point hitting ESI just to get 403s.
     let structure_ids: Vec<i64> = root_ids
         .iter()
         .copied()
@@ -433,7 +441,19 @@ pub async fn assets_load(
         HashMap::new()
     } else {
         match storage::primary_character(&dir) {
-            Some(char_id) => fetch_structure_info(&auth_state, char_id, &structure_ids).await,
+            Some(char_id) => {
+                // Check the roster's stored scopes (extracted from the login
+                // JWT) to avoid round-tripping through ESI when the scope
+                // isn't granted — the user just needs to enable it + re-login.
+                let has_scope = storage::load_roster(&dir).iter().any(|c| {
+                    c.character_id == char_id && c.scopes.iter().any(|s| s == STRUCTURES_SCOPE)
+                });
+                if has_scope {
+                    fetch_structure_info(&auth_state, char_id, &structure_ids).await
+                } else {
+                    HashMap::new()
+                }
+            }
             None => HashMap::new(),
         }
     };
