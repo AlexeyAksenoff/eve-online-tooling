@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bug,
@@ -160,15 +160,29 @@ export function FeedbackPage() {
     characterId,
   };
 
-  // Opening the page is also when we flush anything that failed to send while
-  // the user was offline — but only on a build that can send at all, otherwise
-  // that is a guaranteed round of failures for no reason.
   const history = useQuery({
     queryKey: ["feedback", "history"],
-    queryFn: () =>
-      status.data?.configured ? feedbackRetryPending() : feedbackHistory(),
+    queryFn: feedbackHistory,
     enabled: status.isSuccess,
   });
+
+  // Flush anything that failed to send while the user was offline. This
+  // sends data — it's a mutation, not a read, so it doesn't belong inside
+  // a `useQuery`'s queryFn (which React Query can re-run on remount/
+  // refocus/staleness far more often than "the user opened this page",
+  // #951). Fires once per mount, only on a build that can send at all.
+  const retryPending = useMutation({
+    mutationFn: feedbackRetryPending,
+    onSuccess: (entries) => qc.setQueryData(["feedback", "history"], entries),
+  });
+  const retriedRef = useRef(false);
+  useEffect(() => {
+    if (status.data?.configured && !retriedRef.current) {
+      retriedRef.current = true;
+      retryPending.mutate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- retryPending.mutate identity is stable across renders (react-query)
+  }, [status.data?.configured]);
 
   // The preview is the *same* record the submit will upload — it comes from the
   // backend rather than being reassembled here, so it can't drift from what is
