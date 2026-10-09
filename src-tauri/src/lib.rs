@@ -403,6 +403,7 @@ pub fn run() {
             modules::wormholes::commands::wh_tripwire_import,
             modules::wormholes::commands::wh_paste_signatures,
             modules::wormholes::commands::wh_signatures,
+            modules::ammo::commands::ammo_reference,
             modules::localintel::commands::localintel_scan,
             modules::localintel::commands::localintel_log_names,
             modules::localintel::commands::localintel_zkill,

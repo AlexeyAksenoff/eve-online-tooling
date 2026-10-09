@@ -2,6 +2,7 @@
 //! services (`esi`, `sde`, `market`, `model`, `storage`).
 
 pub mod accounting;
+pub mod ammo;
 pub mod appraisal;
 pub mod assets;
 pub mod character;
