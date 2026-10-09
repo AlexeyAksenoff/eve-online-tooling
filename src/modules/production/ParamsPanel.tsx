@@ -10,6 +10,7 @@ import { CheckboxGroup, Field } from "../../components/forms";
 import { BasisSelect, Num, Tabs } from "./components";
 import { CostIndexField } from "./CostIndexField";
 import { MultiCombo } from "./MultiCombo";
+import { BuildWizard } from "./BuildWizard";
 import { productionStationSecurity } from "../../lib/api";
 import {
   applyRigBonuses,
@@ -36,11 +37,14 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
   const {
     tab,
     setTab,
+    view,
     name,
     setName,
     ownedCount,
     ownedOnly,
     setOwnedOnly,
+    stockCompleteOnly,
+    setStockCompleteOnly,
     excludeSpecialMods,
     setExcludeSpecialMods,
     favoritesOnly,
@@ -70,6 +74,8 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
     setBuildComponents,
     ignoreBuildFuelBlocks,
     setIgnoreBuildFuelBlocks,
+    ignoreBuildRams,
+    setIgnoreBuildRams,
     includeSaleCost,
     setIncludeSaleCost,
     sellBrokerPct,
@@ -110,395 +116,446 @@ export function ParamsPanel({ wb }: { wb: WorkbenchState }) {
 
   return (
     <>
-      <Tabs tab={tab} onChange={setTab} />
+      {view === "build_planner" ? (
+        <BuildWizard wb={wb} />
+      ) : (
+        <>
+          <Tabs tab={tab} onChange={setTab} />
 
-      <div className="mt-3 rounded border border-zinc-800 bg-zinc-900 p-3">
-        {tab === "item" && (
-          <div className="grid gap-4 md:grid-cols-3">
-            <Field label="Search">
-              <input
-                value={name}
-                onChange={(e) => setName(e.currentTarget.value)}
-                placeholder="name, category, group…"
-                className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
-              />
-              <label
-                className={`mt-1 flex items-center gap-1 text-xs ${
-                  ownedCount > 0 ? "text-zinc-300" : "text-zinc-600"
-                }`}
-                title={
-                  ownedCount > 0
-                    ? "Show only items whose blueprint a logged-in character owns"
-                    : "Log in a character with blueprints to enable"
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={ownedOnly}
-                  disabled={ownedCount === 0}
-                  onChange={(e) => setOwnedOnly(e.currentTarget.checked)}
-                />
-                Owned only{ownedCount > 0 ? ` (${ownedCount})` : ""}
-              </label>
-              <label
-                className="mt-1 flex items-center gap-1 text-xs text-zinc-300"
-                title="Show only items you've favorited (★)"
-              >
-                <input
-                  type="checkbox"
-                  checked={favoritesOnly}
-                  onChange={(e) => setFavoritesOnly(e.currentTarget.checked)}
-                />
-                Favorites only
-              </label>
-              <label
-                className="mt-1 flex items-center gap-1 text-xs text-zinc-300"
-                title="Hide Abyssal, Faction, Storyline, Deadspace, and Officer items — LP-store/NPC-drop/mutaplasmid lines you wouldn't build to sell, even when a blueprint exists (plain Tech I/II are unaffected)"
-              >
-                <input
-                  type="checkbox"
-                  checked={excludeSpecialMods}
-                  onChange={(e) =>
-                    setExcludeSpecialMods(e.currentTarget.checked)
-                  }
-                />
-                Excl. Abyssal/Faction/Storyline/Deadspace/Officer
-              </label>
-            </Field>
-            <Field label="Category / Type">
-              <CheckboxGroup
-                options={categoryOptions}
-                selected={categories}
-                onToggle={(v) => setCategories(toggle(categories, v))}
-                maxHeight="max-h-40"
-              />
-            </Field>
-            <Field label="Meta (tech level / faction)">
-              <CheckboxGroup
-                options={metaOptions}
-                selected={metas}
-                onToggle={(v) => setMetas(toggle(metas, v))}
-                maxHeight="max-h-40"
-              />
-            </Field>
-          </div>
-        )}
-
-        {tab === "market" && (
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Field label="Region">
-              <RegionSelect
-                regions={regions.data}
-                value={regionId}
-                onChange={(id) => {
-                  setRegionId(id);
-                  setStationId(null);
-                }}
-              />
-            </Field>
-            <Field label="Station">
-              <StationSelect
-                stations={stations}
-                value={stationId}
-                onChange={setStationId}
-              />
-            </Field>
-            <Field label="Materials priced at">
-              <BasisSelect value={materialBasis} onChange={setMaterialBasis} />
-              <label
-                className="mt-1 flex items-center gap-1 text-xs text-zinc-300"
-                title="Net your owned assets (across the roster) against each bill of materials — you only pay for the shortfall."
-              >
-                <input
-                  type="checkbox"
-                  checked={useStock}
-                  onChange={(e) => setUseStock(e.currentTarget.checked)}
-                />
-                Use my stock{stock.isFetching ? " (loading…)" : ""}
-              </label>
-            </Field>
-            <Field label="Product priced at">
-              <BasisSelect value={productBasis} onChange={setProductBasis} />
-              <label
-                className="mt-1 flex items-center gap-1 text-xs text-zinc-300"
-                title="Price each product at whichever hub pays the most (materials still priced at the chosen market). Slower — prices all hubs."
-              >
-                <input
-                  type="checkbox"
-                  checked={productBestHub}
-                  onChange={(e) => setProductBestHub(e.currentTarget.checked)}
-                />
-                Sell at best hub
-              </label>
-            </Field>
-            <Field label="Components">
-              <label
-                className="flex items-center gap-1 py-1 text-xs text-zinc-300"
-                title="On: build intermediate components when cheaper than buying (recursive build-vs-buy). Off: buy every material at market."
-              >
-                <input
-                  type="checkbox"
-                  checked={buildComponents}
-                  onChange={(e) => setBuildComponents(e.currentTarget.checked)}
-                />
-                Build sub-components
-              </label>
-            </Field>
-            <Field label="Always buy fuel blocks &amp; RAMs">
-              <label
-                className="flex flex-col gap-1 py-1 text-xs text-zinc-300"
-                title="Fuel Blocks (group 1136) and R.A.M.-ы (group 332) are always bought at market — never built — even when building sub-components."
-              >
-                <span className="flex items-center gap-2">
+          <div className="mt-3 rounded border border-zinc-800 bg-zinc-900 p-3">
+            {tab === "item" && (
+              <div className="grid gap-4 md:grid-cols-3">
+                <Field label="Search">
                   <input
-                    type="checkbox"
-                    checked={ignoreBuildFuelBlocks}
-                    onChange={(e) =>
-                      setIgnoreBuildFuelBlocks(e.currentTarget.checked)
+                    value={name}
+                    onChange={(e) => setName(e.currentTarget.value)}
+                    placeholder="name, category, group…"
+                    className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
+                  />
+                  <label
+                    className={`mt-1 flex items-center gap-1 text-xs ${
+                      ownedCount > 0 ? "text-zinc-300" : "text-zinc-600"
+                    }`}
+                    title={
+                      ownedCount > 0
+                        ? "Show only items whose blueprint a logged-in character owns"
+                        : "Log in a character with blueprints to enable"
                     }
-                  />
-                  Always buy fuel blocks &amp; RAMs
-                </span>
-              </label>
-            </Field>
-            <Field label="Sale costs">
-              <label
-                className="flex items-center gap-1 py-1 text-xs text-zinc-300"
-                title="Subtract broker fee + sales tax from the product sale when computing profit."
-              >
-                <input
-                  type="checkbox"
-                  checked={includeSaleCost}
-                  onChange={(e) => setIncludeSaleCost(e.currentTarget.checked)}
-                />
-                Subtract broker + tax
-              </label>
-              {includeSaleCost && (
-                <div className="mt-1 space-y-1">
-                  <label className="flex items-center gap-1 text-[10px] text-zinc-500">
+                  >
                     <input
-                      type="number"
-                      value={sellBrokerPct}
-                      min={0}
-                      onChange={(e) =>
-                        setSellBrokerPct(Number(e.currentTarget.value))
-                      }
-                      className="w-16 rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
+                      type="checkbox"
+                      checked={ownedOnly}
+                      disabled={ownedCount === 0}
+                      onChange={(e) => setOwnedOnly(e.currentTarget.checked)}
                     />
-                    broker %
+                    Owned only{ownedCount > 0 ? ` (${ownedCount})` : ""}
                   </label>
-                  <label className="flex items-center gap-1 text-[10px] text-zinc-500">
+                  <label
+                    className="mt-1 flex items-center gap-1 text-xs text-zinc-300"
+                    title="Show only items you've favorited (★)"
+                  >
                     <input
-                      type="number"
-                      value={sellTaxPct}
-                      min={0}
+                      type="checkbox"
+                      checked={favoritesOnly}
                       onChange={(e) =>
-                        setSellTaxPct(Number(e.currentTarget.value))
+                        setFavoritesOnly(e.currentTarget.checked)
                       }
-                      className="w-16 rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
                     />
-                    tax %
+                    Favorites only
                   </label>
-                  <FeesFromCharacter
-                    onApply={(b, t) => {
-                      setSellBrokerPct(b);
-                      setSellTaxPct(t);
-                    }}
+                  <label
+                    className={`mt-1 flex items-center gap-1 text-xs ${
+                      useStock ? "text-zinc-300" : "text-zinc-600"
+                    }`}
+                    title={
+                      useStock
+                        ? "Show only items whose full material cost is covered by character stock"
+                        : "Enable 'Use stock' in the Market tab to inventory your warehouse"
+                    }
+                  >
+                    <input
+                      type="checkbox"
+                      checked={stockCompleteOnly}
+                      disabled={!useStock}
+                      onChange={(e) =>
+                        setStockCompleteOnly(e.currentTarget.checked)
+                      }
+                    />
+                    Stock-complete builds only
+                  </label>
+                  <label
+                    className="mt-1 flex items-center gap-1 text-xs text-zinc-300"
+                    title="Hide Abyssal, Faction, Storyline, Deadspace, and Officer items — LP-store/NPC-drop/mutaplasmid lines you wouldn't build to sell, even when a blueprint exists (plain Tech I/II are unaffected)"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={excludeSpecialMods}
+                      onChange={(e) =>
+                        setExcludeSpecialMods(e.currentTarget.checked)
+                      }
+                    />
+                    Excl. Abyssal/Faction/Storyline/Deadspace/Officer
+                  </label>
+                </Field>
+                <Field label="Category / Type">
+                  <CheckboxGroup
+                    options={categoryOptions}
+                    selected={categories}
+                    onToggle={(v) => setCategories(toggle(categories, v))}
+                    maxHeight="max-h-40"
                   />
-                </div>
-              )}
-            </Field>
-          </div>
-        )}
-
-        {tab === "industry" && (
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Num label="Runs" value={runs} onChange={setRuns} min={1} />
-            <Field label={`ME (default for un-owned)`}>
-              <input
-                type="number"
-                value={me}
-                min={0}
-                max={10}
-                onChange={(e) => setMe(Number(e.currentTarget.value))}
-                className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
-              />
-              <label
-                className={`mt-1 flex items-center gap-1 text-xs ${
-                  ownedCount > 0 ? "text-zinc-300" : "text-zinc-600"
-                }`}
-                title={
-                  ownedCount > 0
-                    ? "Use each owned blueprint's researched ME instead of the value above"
-                    : "Log in a character with blueprints to enable"
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={useOwnedMe}
-                  disabled={ownedCount === 0}
-                  onChange={(e) => setUseOwnedMe(e.currentTarget.checked)}
-                />
-                Use owned blueprint ME{ownedCount > 0 ? ` (${ownedCount})` : ""}
-              </label>
-            </Field>
-            <Num
-              label="TE (default for un-owned)"
-              value={te}
-              onChange={setTe}
-              min={0}
-              max={20}
-            />
-            <Num
-              label="Time skills (0-5)"
-              value={timeSkill}
-              onChange={setTimeSkill}
-              min={0}
-              max={5}
-            />
-
-            {/* Build sub-components: shared ME/TE applied to ALL component build
-              steps (is_component) whose blueprint isn't owned. Separate from the
-                        global ME/TE above (which stays on end-products). */}
-            {buildComponents && (
-              <fieldset className="mt-3 space-y-2 rounded border border-zinc-800 p-2.5">
-                <legend className="px-1 text-[11px] font-medium text-zinc-400">
-                  Components ME / TE
-                </legend>
-                <Num
-                  label="ME (components)"
-                  value={componentMe}
-                  onChange={setComponentMe}
-                  min={0}
-                  max={10}
-                  placeholder="fallback for un-owned component BPs"
-                />
-                <Num
-                  label="TE (components)"
-                  value={componentTe}
-                  onChange={setComponentTe}
-                  min={0}
-                  max={20}
-                  placeholder="fallback for un-owned component BPs"
-                />
-              </fieldset>
+                </Field>
+                <Field label="Meta (tech level / faction)">
+                  <CheckboxGroup
+                    options={metaOptions}
+                    selected={metas}
+                    onToggle={(v) => setMetas(toggle(metas, v))}
+                    maxHeight="max-h-40"
+                  />
+                </Field>
+              </div>
             )}
 
-            {/* Facility profile preview (configured in the Facilities tab) */}
-            <Field label="Manufacturing facility">
-              <div className="text-sm text-zinc-300">
-                {facilityProfileLabel(facilityProfiles.manufacturing)}
+            {tab === "market" && (
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <Field label="Region">
+                  <RegionSelect
+                    regions={regions.data}
+                    value={regionId}
+                    onChange={(id) => {
+                      setRegionId(id);
+                      setStationId(null);
+                    }}
+                  />
+                </Field>
+                <Field label="Station">
+                  <StationSelect
+                    stations={stations}
+                    value={stationId}
+                    onChange={setStationId}
+                  />
+                </Field>
+                <Field label="Materials priced at">
+                  <BasisSelect
+                    value={materialBasis}
+                    onChange={setMaterialBasis}
+                  />
+                  <label
+                    className="mt-1 flex items-center gap-1 text-xs text-zinc-300"
+                    title="Net your owned assets (across the roster) against each bill of materials — you only pay for the shortfall."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={useStock}
+                      onChange={(e) => setUseStock(e.currentTarget.checked)}
+                    />
+                    Use my stock{stock.isFetching ? " (loading…)" : ""}
+                  </label>
+                </Field>
+                <Field label="Product priced at">
+                  <BasisSelect
+                    value={productBasis}
+                    onChange={setProductBasis}
+                  />
+                  <label
+                    className="mt-1 flex items-center gap-1 text-xs text-zinc-300"
+                    title="Price each product at whichever hub pays the most (materials still priced at the chosen market). Slower — prices all hubs."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={productBestHub}
+                      onChange={(e) =>
+                        setProductBestHub(e.currentTarget.checked)
+                      }
+                    />
+                    Sell at best hub
+                  </label>
+                </Field>
+                <Field label="Components">
+                  <label
+                    className="flex items-center gap-1 py-1 text-xs text-zinc-300"
+                    title="On: build intermediate components when cheaper than buying (recursive build-vs-buy). Off: buy every material at market."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={buildComponents}
+                      onChange={(e) =>
+                        setBuildComponents(e.currentTarget.checked)
+                      }
+                    />
+                    Build sub-components
+                  </label>
+                </Field>
+                <Field label="Always buy (never build)">
+                  <label
+                    className="flex flex-col gap-1 py-1 text-xs text-zinc-300"
+                    title="Items in these groups are always sourced from market, never built — even when building sub-components."
+                  >
+                    <span className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={ignoreBuildFuelBlocks}
+                        onChange={(e) =>
+                          setIgnoreBuildFuelBlocks(e.currentTarget.checked)
+                        }
+                      />
+                      Fuel blocks (group 1136)
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={ignoreBuildRams}
+                        onChange={(e) =>
+                          setIgnoreBuildRams(e.currentTarget.checked)
+                        }
+                      />
+                      R.A.M. (group 332)
+                    </span>
+                  </label>
+                </Field>
+                <Field label="Sale costs">
+                  <label
+                    className="flex items-center gap-1 py-1 text-xs text-zinc-300"
+                    title="Subtract broker fee + sales tax from the product sale when computing profit."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={includeSaleCost}
+                      onChange={(e) =>
+                        setIncludeSaleCost(e.currentTarget.checked)
+                      }
+                    />
+                    Subtract broker + tax
+                  </label>
+                  {includeSaleCost && (
+                    <div className="mt-1 space-y-1">
+                      <label className="flex items-center gap-1 text-[10px] text-zinc-500">
+                        <input
+                          type="number"
+                          value={sellBrokerPct}
+                          min={0}
+                          onChange={(e) =>
+                            setSellBrokerPct(Number(e.currentTarget.value))
+                          }
+                          className="w-16 rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
+                        />
+                        broker %
+                      </label>
+                      <label className="flex items-center gap-1 text-[10px] text-zinc-500">
+                        <input
+                          type="number"
+                          value={sellTaxPct}
+                          min={0}
+                          onChange={(e) =>
+                            setSellTaxPct(Number(e.currentTarget.value))
+                          }
+                          className="w-16 rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
+                        />
+                        tax %
+                      </label>
+                      <FeesFromCharacter
+                        onApply={(b, t) => {
+                          setSellBrokerPct(b);
+                          setSellTaxPct(t);
+                        }}
+                      />
+                    </div>
+                  )}
+                </Field>
               </div>
-              <div className="mt-1 text-[11px] text-zinc-500">
-                Configure structure, rigs, cost index, and tax in the
-                <button
-                  onClick={() => setTab("facilities")}
-                  className="ml-1 underline hover:text-zinc-300"
-                >
-                  Facilities tab
-                </button>
-                .
-              </div>
-            </Field>
+            )}
 
-            <Num
-              label="Blueprint cost / run"
-              value={blueprintCostPerRun}
-              onChange={setBlueprintCostPerRun}
-              min={0}
-              step={1000000}
-            />
-            <Num
-              label="Invention skills (0-5)"
-              value={inventionSkill}
-              onChange={setInventionSkill}
-              min={0}
-              max={5}
-            />
-            <Field label="Decryptor (T2 invention)">
-              <select
-                value={decryptorTypeId ?? ""}
-                onChange={(e) =>
-                  setDecryptorTypeId(
-                    e.currentTarget.value === ""
-                      ? null
-                      : Number(e.currentTarget.value),
-                  )
-                }
-                className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
-              >
-                <option value="">None</option>
-                {decryptors.data?.map((d) => (
-                  <option key={d.typeId} value={d.typeId}>
-                    {d.name.replace(/ Decryptor$/, "")} (ME{" "}
-                    {d.meModifier >= 0 ? "+" : ""}
-                    {d.meModifier}, runs {d.runModifier >= 0 ? "+" : ""}
-                    {d.runModifier}, ×{d.probabilityMultiplier} prob)
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
-        )}
-
-        {tab === "thresholds" && (
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Field label="Min ROI %">
-              <input
-                type="number"
-                value={minRoiPct}
-                min={0}
-                onChange={(e) => setMinRoiPct(e.currentTarget.value)}
-                placeholder="0"
-                className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
-              />
-            </Field>
-            <Field label="Min volume">
-              <input
-                type="number"
-                value={minVolume}
-                min={0}
-                disabled={stationId === null}
-                onChange={(e) => setMinVolume(e.currentTarget.value)}
-                placeholder={stationId === null ? "pick a market hub" : "0"}
-                className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 disabled:opacity-50"
-              />
-            </Field>
-          </div>
-        )}
-
-        {tab === "paste" && (
-          <div className="grid gap-4 md:grid-cols-3">
-            <div className="md:col-span-2">
-              <Field label="Paste items (names, EVE Multibuy, inventory dump)">
-                <textarea
-                  value={pasteList}
-                  onChange={(e) => setPasteList(e.currentTarget.value)}
-                  rows={6}
-                  placeholder={"Rifter\nWarrior II\n…"}
-                  className="w-full rounded bg-zinc-800 px-2 py-1 font-mono text-xs text-zinc-100 outline-none placeholder:text-zinc-500"
+            {tab === "industry" && (
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <Num label="Runs" value={runs} onChange={setRuns} min={1} />
+                <Field label={`ME (default for un-owned)`}>
+                  <input
+                    type="number"
+                    value={me}
+                    min={0}
+                    max={10}
+                    onChange={(e) => setMe(Number(e.currentTarget.value))}
+                    className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
+                  />
+                  <label
+                    className={`mt-1 flex items-center gap-1 text-xs ${
+                      ownedCount > 0 ? "text-zinc-300" : "text-zinc-600"
+                    }`}
+                    title={
+                      ownedCount > 0
+                        ? "Use each owned blueprint's researched ME instead of the value above"
+                        : "Log in a character with blueprints to enable"
+                    }
+                  >
+                    <input
+                      type="checkbox"
+                      checked={useOwnedMe}
+                      disabled={ownedCount === 0}
+                      onChange={(e) => setUseOwnedMe(e.currentTarget.checked)}
+                    />
+                    Use owned blueprint ME
+                    {ownedCount > 0 ? ` (${ownedCount})` : ""}
+                  </label>
+                </Field>
+                <Num
+                  label="TE (default for un-owned)"
+                  value={te}
+                  onChange={setTe}
+                  min={0}
+                  max={20}
                 />
-              </Field>
-              <p className="mt-1 text-[11px] text-zinc-500">
-                Filters Opportunities to the pasted items and flags which clear
-                the min ROI below.
-              </p>
-            </div>
-            <Field label="Min ROI % to count as worth selling">
-              <input
-                type="number"
-                value={pasteMinRoiPct}
-                min={0}
-                onChange={(e) => setPasteMinRoiPct(e.currentTarget.value)}
-                placeholder="0"
-                className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
-              />
-            </Field>
-          </div>
-        )}
+                <Num
+                  label="Time skills (0-5)"
+                  value={timeSkill}
+                  onChange={setTimeSkill}
+                  min={0}
+                  max={5}
+                />
 
-        {tab === "facilities" && <FacilityProfilePanel wb={wb} />}
-      </div>
+                {/* Build sub-components: shared ME/TE applied to ALL component build
+              steps (is_component) whose blueprint isn't owned. Separate from the
+                        global ME/TE above (which stays on end-products). */}
+                {buildComponents && (
+                  <fieldset className="mt-3 space-y-2 rounded border border-zinc-800 p-2.5">
+                    <legend className="px-1 text-[11px] font-medium text-zinc-400">
+                      Components ME / TE
+                    </legend>
+                    <Num
+                      label="ME (components)"
+                      value={componentMe}
+                      onChange={setComponentMe}
+                      min={0}
+                      max={10}
+                      placeholder="fallback for un-owned component BPs"
+                    />
+                    <Num
+                      label="TE (components)"
+                      value={componentTe}
+                      onChange={setComponentTe}
+                      min={0}
+                      max={20}
+                      placeholder="fallback for un-owned component BPs"
+                    />
+                  </fieldset>
+                )}
+
+                {/* Facility profile preview (configured in the Facilities tab) */}
+                <Field label="Manufacturing facility">
+                  <div className="text-sm text-zinc-300">
+                    {facilityProfileLabel(facilityProfiles.manufacturing)}
+                  </div>
+                  <div className="mt-1 text-[11px] text-zinc-500">
+                    Configure structure, rigs, cost index, and tax in the
+                    <button
+                      onClick={() => setTab("facilities")}
+                      className="ml-1 underline hover:text-zinc-300"
+                    >
+                      Facilities tab
+                    </button>
+                    .
+                  </div>
+                </Field>
+
+                <Num
+                  label="Blueprint cost / run"
+                  value={blueprintCostPerRun}
+                  onChange={setBlueprintCostPerRun}
+                  min={0}
+                  step={1000000}
+                />
+                <Num
+                  label="Invention skills (0-5)"
+                  value={inventionSkill}
+                  onChange={setInventionSkill}
+                  min={0}
+                  max={5}
+                />
+                <Field label="Decryptor (T2 invention)">
+                  <select
+                    value={decryptorTypeId ?? ""}
+                    onChange={(e) =>
+                      setDecryptorTypeId(
+                        e.currentTarget.value === ""
+                          ? null
+                          : Number(e.currentTarget.value),
+                      )
+                    }
+                    className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
+                  >
+                    <option value="">None</option>
+                    {decryptors.data?.map((d) => (
+                      <option key={d.typeId} value={d.typeId}>
+                        {d.name.replace(/ Decryptor$/, "")} (ME{" "}
+                        {d.meModifier >= 0 ? "+" : ""}
+                        {d.meModifier}, runs {d.runModifier >= 0 ? "+" : ""}
+                        {d.runModifier}, ×{d.probabilityMultiplier} prob)
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+            )}
+
+            {tab === "thresholds" && (
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <Field label="Min ROI %">
+                  <input
+                    type="number"
+                    value={minRoiPct}
+                    min={0}
+                    onChange={(e) => setMinRoiPct(e.currentTarget.value)}
+                    placeholder="0"
+                    className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
+                  />
+                </Field>
+                <Field label="Min volume">
+                  <input
+                    type="number"
+                    value={minVolume}
+                    min={0}
+                    disabled={stationId === null}
+                    onChange={(e) => setMinVolume(e.currentTarget.value)}
+                    placeholder={stationId === null ? "pick a market hub" : "0"}
+                    className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 disabled:opacity-50"
+                  />
+                </Field>
+              </div>
+            )}
+
+            {tab === "paste" && (
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="md:col-span-2">
+                  <Field label="Paste items (names, EVE Multibuy, inventory dump)">
+                    <textarea
+                      value={pasteList}
+                      onChange={(e) => setPasteList(e.currentTarget.value)}
+                      rows={6}
+                      placeholder={"Rifter\nWarrior II\n…"}
+                      className="w-full rounded bg-zinc-800 px-2 py-1 font-mono text-xs text-zinc-100 outline-none placeholder:text-zinc-500"
+                    />
+                  </Field>
+                  <p className="mt-1 text-[11px] text-zinc-500">
+                    Filters Opportunities to the pasted items and flags which
+                    clear the min ROI below.
+                  </p>
+                </div>
+                <Field label="Min ROI % to count as worth selling">
+                  <input
+                    type="number"
+                    value={pasteMinRoiPct}
+                    min={0}
+                    onChange={(e) => setPasteMinRoiPct(e.currentTarget.value)}
+                    placeholder="0"
+                    className="w-full rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none placeholder:text-zinc-500"
+                  />
+                </Field>
+              </div>
+            )}
+
+            {tab === "facilities" && <FacilityProfilePanel wb={wb} />}
+          </div>
+        </>
+      )}
     </>
   );
 }

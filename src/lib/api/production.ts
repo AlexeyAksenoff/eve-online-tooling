@@ -1,19 +1,23 @@
 import {
   commands,
+  type BlueprintSearchResult,
   type Decryptor,
   type ImplantBonus,
   type InventionBreakdown,
   type MaterialLine,
   type PriceBasis,
   type ProfitBreakdown,
-  type FacilityType,
   type ProfitParams,
+  type ReactionLine,
+  type ReactionPlan,
+  type FacilityType,
   type RigTypeInfo,
   type SecurityTier,
 } from "./generated/production";
 import { unwrapCommand } from "./common";
 
 export type {
+  BlueprintSearchResult,
   Decryptor,
   ImplantBonus,
   InventionBreakdown,
@@ -21,6 +25,8 @@ export type {
   PriceBasis,
   ProfitBreakdown,
   ProfitParams,
+  ReactionLine,
+  ReactionPlan,
   RigTypeInfo,
   SecurityTier,
 };
@@ -30,6 +36,26 @@ export async function productionProfit(
   params: ProfitParams,
 ): Promise<ProfitBreakdown[]> {
   return unwrapCommand(await commands.productionProfit(params));
+}
+
+/** Price a single blueprint and return its full build-vs-buy breakdown.
+ *  Used by the Build Planner to avoid pricing the entire catalogue. */
+export async function productionProfitForBlueprint(
+  blueprintTypeId: number,
+  params: ProfitParams,
+): Promise<ProfitBreakdown> {
+  return unwrapCommand(
+    await commands.productionProfitForBlueprint(blueprintTypeId, params),
+  );
+}
+
+/** Search manufacturable blueprints by product name (case-insensitive,
+ *  multi-term AND). Returns short results for the Build Planner picker. */
+export async function productionSearchBlueprints(
+  query: string,
+  limit: number,
+): Promise<BlueprintSearchResult[]> {
+  return unwrapCommand(await commands.productionSearchBlueprints(query, limit));
 }
 
 /** The invention decryptors, for the production decryptor dropdown. */

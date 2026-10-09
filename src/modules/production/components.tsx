@@ -150,6 +150,7 @@ export function ViewTabs({
     { value: "favorites", label: `Favorites (${counts.favorites})` },
     { value: "blacklist", label: `Blacklist (${counts.blacklist})` },
     { value: "library", label: `Library (${counts.library})` },
+    { value: "build_planner", label: "Build Planner" },
   ];
   return (
     <div className="mt-4 inline-flex rounded border border-zinc-800 bg-zinc-900 p-0.5">

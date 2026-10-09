@@ -158,6 +158,7 @@ export function ProfitTable({
   hub,
   onFavorite,
   onBlacklist,
+  onPlanBuild,
 }: {
   rows: ProfitBreakdown[];
   /** Region the products are priced in — used by the price-history popover. */
@@ -167,6 +168,8 @@ export function ProfitTable({
   hub?: string;
   onFavorite: (r: ProfitBreakdown) => void;
   onBlacklist: (r: ProfitBreakdown) => void;
+  /** Switch to the Build Planner with this blueprint pre-filled. */
+  onPlanBuild: (r: ProfitBreakdown) => void;
 }) {
   const { sortKey, sortDir, toggleSort } = usePersistentSort<SortKey>(
     "sort.production",
@@ -337,7 +340,7 @@ export function ProfitTable({
                   )}
                 </td>
               </tr>
-              {open && <BreakdownRow row={r} />}
+              {open && <BreakdownRow row={r} onPlanBuild={onPlanBuild} />}
             </Fragment>
           );
         }}
@@ -471,7 +474,13 @@ export function TableSkeleton({ rows = 12 }: { rows?: number }) {
   );
 }
 
-function BreakdownRow({ row }: { row: ProfitBreakdown }) {
+function BreakdownRow({
+  row,
+  onPlanBuild,
+}: {
+  row: ProfitBreakdown;
+  onPlanBuild: (r: ProfitBreakdown) => void;
+}) {
   const { copied, copy } = useCopyToClipboard();
   return (
     <tr className="border-t border-zinc-800 bg-zinc-900/40">
@@ -544,6 +553,13 @@ function BreakdownRow({ row }: { row: ProfitBreakdown }) {
                 className="rounded border border-zinc-700 px-1.5 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800"
               />
             )}
+            <button
+              onClick={() => onPlanBuild(row)}
+              title="Plan this specific build in the Build Planner"
+              className="rounded border border-indigo-700/50 px-1.5 py-0.5 text-[11px] text-indigo-300 hover:bg-zinc-800"
+            >
+              Plan build
+            </button>
           </div>
         </div>
         <table className="w-full text-xs">

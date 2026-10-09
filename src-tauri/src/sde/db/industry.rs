@@ -181,6 +181,44 @@ impl Sde {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Search manufacturable blueprints by product name (case-insensitive
+    /// substring, multi-term AND). Returns `(blueprint_type_id, product_name,
+    /// product_quantity)` — enough for the Build Planner picker without pricing
+    /// the whole catalogue. Shorter names rank first.
+    pub fn search_manufacturable_blueprints(
+        &self,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<(i64, String, i64)>, SdeError> {
+        let terms: Vec<String> = query
+            .split_whitespace()
+            .map(|t| format!("%{}%", t))
+            .collect();
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let clause = vec!["t.typeName LIKE ?;"; terms.len()].join(" AND ");
+        let sql = format!(
+            "SELECT iap.typeID, t.typeName, iap.quantity
+             FROM industryActivityProducts iap
+             JOIN invTypes t ON t.typeID = iap.productTypeID
+             WHERE iap.activityID = {} AND {clause} AND t.published = 1
+             ORDER BY LENGTH(t.typeName), t.typeName
+             LIMIT ?",
+            activity::MANUFACTURING
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut binds: Vec<rusqlite::types::Value> = terms
+            .into_iter()
+            .map(rusqlite::types::Value::Text)
+            .collect();
+        binds.push(rusqlite::types::Value::Integer(limit));
+        let rows = stmt.query_map(rusqlite::params_from_iter(binds), |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// The invention (activity 8) that produces this blueprint, if it's a T2
     /// blueprint invented from a T1 one. `None` for T1 (uninvented) blueprints.
     #[allow(dead_code)]

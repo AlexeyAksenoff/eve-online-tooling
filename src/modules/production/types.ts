@@ -1,7 +1,7 @@
 import { STORAGE_KEYS } from "../../lib/storageKeys";
 
 export type ResultsView =
-  "opportunities" | "favorites" | "blacklist" | "library";
+  "opportunities" | "favorites" | "blacklist" | "library" | "build_planner";
 
 // --- Facility profile types (mirror Rust `FacilityProfile`/`FacilityProfiles`) ---
 
@@ -148,11 +148,17 @@ export function securityToTier(
   return "nullsec";
 }
 
-/** Inventory group IDs always bought (never built), matching EVE-IPH's
- *  `AlwaysBuyFuelBlocks`/`AlwaysBuyRAMs`: 1136 = Fuel Blocks, 332 = R.A.M.-ы.
- *  Toggled by the "Always buy fuel blocks & RAMs" checkbox in the Production
- *  facility panel. */
-export const IGNORE_BUILD_GROUPS_DEFAULT: readonly number[] = [1136, 332];
+/** Inventory group IDs for items that are always bought (never built), matching
+ *  EVE-IPH's `AlwaysBuyFuelBlocks`/`AlwaysBuyRAMs`. Toggled by separate
+ *  checkboxes in the Production panel.
+ * - 1136 = Fuel Blocks
+ * - 332 = R.A.M. (industry materials) */
+export const FUEL_BLOCK_GROUP_ID = 1136;
+export const RAM_GROUP_ID = 332;
+export const IGNORE_BUILD_GROUPS_DEFAULT: readonly number[] = [
+  FUEL_BLOCK_GROUP_ID,
+  RAM_GROUP_ID,
+];
 
 /** A production-capacity profile for one facility type (manufacturing or
  *  reaction). Matches Rust `FacilityProfile`. */

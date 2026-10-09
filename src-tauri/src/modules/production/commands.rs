@@ -1,6 +1,6 @@
 //! Tauri command surface for the production module.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
@@ -9,10 +9,12 @@ use crate::esi::EsiClient;
 use crate::lists::{self, ListItem};
 use crate::market::{
     deduplicated_cached_fetch_with_stale_fallback, default_region_id, location_label,
-    resolve_location, KeyLocks, MarketService,
+    resolve_location, BestSell, KeyLocks, MarketService, PriceModel,
 };
 use crate::model::AppError;
-use crate::sde::Sde;
+use crate::sde::{
+    BlueprintMaterial, Decryptor, InventionData, ManufacturableBlueprint, Recipe, Sde,
+};
 use crate::storage;
 
 #[cfg(test)]
@@ -21,7 +23,6 @@ use super::engine::{
     evaluate_with_stock, manufacturing_step, Activity, BuildStep, InputLine, Invention, PriceBasis,
     ProfitBreakdown, ProfitConfig, Sourcing,
 };
-use crate::sde::Recipe;
 
 /// How deep the recursive build-vs-buy tree is resolved.
 const MAX_TREE_DEPTH: u32 = 5;
@@ -219,7 +220,7 @@ pub struct ProfitParams {
     pub component_te: i64,
     /// Inventory group IDs whose materials are always bought (never built),
     /// even when `build_components` is on — matches EVE-IPH's
-    /// `AlwaysBuyFuelBlocks`/`AlwaysBuyRAMs`: 1136 = Fuel Blocks, 332 = R.A.M.-ы.
+    /// `AlwaysBuyFuelBlocks`/`AlwaysBuyRAMs`: 1136 = Fuel Blocks, 332 = R.A.M.
     /// Empty = build normally (no forced buy).
     #[serde(default)]
     pub ignore_build_groups: Vec<i64>,
@@ -245,6 +246,280 @@ fn default_ignore_side_products() -> bool {
 /// default its T2-ME assumption to the same real EVE invention mechanic
 /// instead of duplicating the constant.
 pub(crate) const BASE_T2_ME: i64 = 2;
+
+/// Walk a build tree and sum the reaction-job time (seconds) for all
+/// Reaction sub-steps. Reactions get no Industry-skill bonus, but do get
+/// the reaction facility's TE bonus and role-bonus time (Tatara −25%).
+fn reaction_time_for_step(
+    step: &BuildStep,
+    base_times_rxn: &HashMap<i64, i64>,
+    params: &ProfitParams,
+    config: &ProfitConfig,
+    runs: i64,
+    depth: u32,
+) -> f64 {
+    if depth == 0 {
+        return 0.0;
+    }
+    let mut total = 0.0;
+    if step.activity == Activity::Reaction {
+        if let Some(&base) = base_times_rxn.get(&step.blueprint_type_id) {
+            let te = params
+                .owned_te
+                .get(&step.blueprint_type_id)
+                .copied()
+                .unwrap_or(params.te);
+            let te_bonus = config.te_bonus_pct_for_step(step);
+            let role_bonus = config.role_bonus_time_for_step(step);
+            // Reaction time = base × runs × (1 − TE) × (1 − facility_TE) × (1 − role_bonus)
+            total += base as f64
+                * runs as f64
+                * (1.0 - te as f64 / 100.0)
+                * (1.0 - te_bonus / 100.0)
+                * (1.0 - role_bonus);
+        }
+    }
+    for input in &step.inputs {
+        if let Sourcing::Build(sub) = &input.sourcing {
+            total += reaction_time_for_step(sub, base_times_rxn, params, config, runs, depth - 1);
+        }
+    }
+    total
+}
+
+/// Build a manufacturing step for one blueprint, recursively resolving its
+/// inputs into build-or-buy sub-trees. Collects the type ids we need prices
+/// for into `needed`. Returns `Ok(None)` when the blueprint has no valid
+/// invention probability (SDE data gap, #811) — the caller should skip it.
+#[allow(clippy::too_many_arguments)]
+fn build_step_for_bp(
+    sde: &Sde,
+    all_materials: &HashMap<i64, Vec<BlueprintMaterial>>,
+    all_invention: &HashMap<i64, InventionData>,
+    decryptor: Option<&Decryptor>,
+    bp: &ManufacturableBlueprint,
+    params: &ProfitParams,
+    needed: &mut HashSet<i64>,
+    recipe_cache: &mut HashMap<i64, Option<Recipe>>,
+) -> Result<Option<BuildStep>, String> {
+    let product = crate::sde::BlueprintProduct {
+        product_type_id: bp.product_type_id,
+        name: bp.product_name.clone(),
+        quantity: bp.product_quantity,
+    };
+    let materials = all_materials
+        .get(&bp.blueprint_type_id)
+        .cloned()
+        .unwrap_or_default();
+    needed.insert(product.product_type_id);
+
+    let mut step = manufacturing_step(bp.blueprint_type_id, &product, &materials);
+    let mut path = vec![product.product_type_id];
+    let mut inputs = Vec::with_capacity(materials.len());
+    for m in &materials {
+        inputs.push(resolve_input(
+            sde,
+            recipe_cache,
+            needed,
+            m.material_type_id,
+            m.name.clone(),
+            m.quantity,
+            MAX_TREE_DEPTH,
+            params.build_components,
+            &params.ignore_build_groups,
+            &mut path,
+        )?);
+    }
+    step.inputs = inputs;
+
+    // T2 items: attach the invention so its expected cost is amortized in.
+    if let Some(inv) = all_invention.get(&bp.blueprint_type_id) {
+        let Some(base_probability) = inv.probability else {
+            // Missing probability row — an SDE integrity gap, not 0% (#811).
+            return Ok(None);
+        };
+        let copy_materials = all_materials
+            .get(&inv.inventing_blueprint_type_id)
+            .cloned()
+            .unwrap_or_default();
+        needed.extend(inv.datacores.iter().map(|d| d.material_type_id));
+        needed.extend(copy_materials.iter().map(|m| m.material_type_id));
+
+        let to_input = |m: &BlueprintMaterial| InputLine {
+            type_id: m.material_type_id,
+            name: m.name.clone(),
+            base_quantity: m.quantity,
+            sourcing: Sourcing::Buy,
+        };
+        let mut datacores: Vec<InputLine> = inv.datacores.iter().map(to_input).collect();
+        if let Some(relic) = &inv.relic {
+            needed.insert(relic.material_type_id);
+            datacores.push(to_input(relic));
+        }
+        let (result_me, runs_per_success, probability) = match decryptor {
+            Some(d) => {
+                needed.insert(d.type_id);
+                datacores.push(InputLine {
+                    type_id: d.type_id,
+                    name: d.name.clone(),
+                    base_quantity: 1,
+                    sourcing: Sourcing::Buy,
+                });
+                (
+                    BASE_T2_ME + d.me_modifier,
+                    inv.runs_per_success + d.run_modifier,
+                    base_probability * d.probability_multiplier,
+                )
+            }
+            None => (BASE_T2_ME, inv.runs_per_success, base_probability),
+        };
+        step.invention = Some(Invention {
+            datacores,
+            copy_materials: copy_materials.iter().map(to_input).collect(),
+            runs_per_success,
+            probability,
+            result_me,
+            base_blueprint_type_id: inv.inventing_blueprint_type_id,
+        });
+    }
+    Ok(Some(step))
+}
+
+/// Build the `ProfitConfig` from the front-end-supplied `ProfitParams`.
+fn make_profit_config(params: &ProfitParams) -> ProfitConfig {
+    let skill = params.invention_skill_level.unwrap_or(5).clamp(0, 5) as f64;
+    let invention_skill_multiplier = 1.0 + skill / 40.0 + 2.0 * skill / 30.0;
+    ProfitConfig {
+        system_cost_index: params.system_cost_index,
+        facility_tax: params.facility_tax,
+        material_basis: params.material_basis.unwrap_or(PriceBasis::SellPercentile),
+        product_basis: params.product_basis.unwrap_or(PriceBasis::SellPercentile),
+        blueprint_cost_per_run: params.blueprint_cost_per_run,
+        invention_skill_multiplier,
+        me_bonus: params.me_bonus,
+        cost_bonus: params.cost_bonus,
+        structure_te_pct: params.structure_te_pct,
+        role_bonus_time: params
+            .facility_profiles
+            .as_ref()
+            .map(|p| p.reaction.role_bonus_time)
+            .unwrap_or(0.0),
+        scc_surcharge: params.scc_surcharge,
+        include_sales_cost: params.include_sales_cost,
+        sales_tax: params.sales_tax,
+        broker_fee: params.broker_fee,
+        facility_profiles: params.facility_profiles.clone(),
+        implant: params.implant.clone(),
+        owned_me: params.owned_me.clone(),
+        owned_te: params.owned_te.clone(),
+        component_me: params.component_me,
+    }
+}
+
+/// Evaluate one step and fill the SDE-derived metadata (meta group, category,
+/// group, market name, favorite flag, times). Shared by `production_profit`
+/// (catalog ranking) and `production_profit_for_blueprint` (single-BP planner).
+#[allow(clippy::too_many_arguments)]
+fn fill_breakdown(
+    step: &BuildStep,
+    params: &ProfitParams,
+    config: &ProfitConfig,
+    prices: &HashMap<i64, PriceModel>,
+    market_name: &str,
+    favorites: &HashSet<i64>,
+    meta: &HashMap<i64, String>,
+    categories: &HashMap<i64, String>,
+    groups: &HashMap<i64, String>,
+    base_bp_names: &HashMap<i64, String>,
+    base_times: &HashMap<i64, i64>,
+    base_times_rxn: &HashMap<i64, i64>,
+    time_skill_mult: f64,
+    mfg_te_mult: f64,
+) -> ProfitBreakdown {
+    let step_me = if step.is_component {
+        params
+            .owned_me
+            .get(&step.blueprint_type_id)
+            .copied()
+            .unwrap_or(params.component_me)
+    } else {
+        params
+            .owned_me
+            .get(&step.blueprint_type_id)
+            .copied()
+            .unwrap_or(params.me)
+    };
+
+    let mut bd = evaluate_with_stock(step, params.runs, step_me, prices, config, &params.stock);
+
+    let te = if step.is_component {
+        params
+            .owned_te
+            .get(&step.blueprint_type_id)
+            .copied()
+            .unwrap_or(params.component_te)
+    } else {
+        params
+            .owned_te
+            .get(&step.blueprint_type_id)
+            .copied()
+            .unwrap_or(params.te)
+    };
+    if let Some(&base) = base_times.get(&step.blueprint_type_id) {
+        let time = base as f64
+            * params.runs as f64
+            * (1.0 - te as f64 / 100.0)
+            * time_skill_mult
+            * mfg_te_mult;
+        bd.job_time_seconds = time;
+        bd.manufacturing_time_seconds = time;
+    }
+    bd.reaction_time_seconds = reaction_time_for_step(
+        step,
+        base_times_rxn,
+        params,
+        config,
+        params.runs,
+        MAX_TREE_DEPTH,
+    );
+    bd.meta_group = Some(
+        meta.get(&bd.product_type_id)
+            .cloned()
+            .unwrap_or_else(|| "Tech I".to_string()),
+    );
+    bd.category = categories.get(&bd.product_type_id).cloned();
+    bd.group = groups.get(&bd.product_type_id).cloned();
+    if let Some(inv) = bd.invention.as_mut() {
+        inv.base_blueprint_name = base_bp_names
+            .get(&inv.base_blueprint_type_id)
+            .cloned()
+            .unwrap_or_default();
+    }
+    bd.market = Some(market_name.to_string());
+    bd.favorite = favorites.contains(&bd.blueprint_type_id);
+    bd
+}
+
+/// Re-price products at their best hub (when "sell at best hub" is on).
+/// Shared by both ranking and single-BP commands.
+fn reprice_at_best_hubs(
+    out: &mut [ProfitBreakdown],
+    best: &HashMap<i64, BestSell>,
+    params: &ProfitParams,
+) {
+    let sales_cost = if params.include_sales_cost {
+        params.sales_tax + params.broker_fee
+    } else {
+        0.0
+    };
+    for bd in out {
+        if let Some(b) = best.get(&bd.product_type_id) {
+            if b.price > bd.product_price.unwrap_or(0.0) {
+                reprice_product(bd, b.price, &b.hub, sales_cost);
+            }
+        }
+    }
+}
 
 /// Rank **every** manufacturable item by build-vs-buy profit at the chosen
 /// market. The whole catalogue is returned; the UI filters it client-side.
@@ -279,100 +554,26 @@ pub async fn production_profit(
     let all_materials = sde.all_blueprint_materials().map_err(|e| e.to_string())?;
     let all_invention = sde.all_invention_products().map_err(|e| e.to_string())?;
     let mut steps = Vec::new();
-    let mut needed = std::collections::HashSet::new();
+    let mut needed = HashSet::new();
     let mut recipe_cache: HashMap<i64, Option<Recipe>> = HashMap::new();
     for bp in sde.manufacturable_blueprints().map_err(|e| e.to_string())? {
         if blacklist.contains(&bp.blueprint_type_id) {
             continue;
         }
-        let product = crate::sde::BlueprintProduct {
-            product_type_id: bp.product_type_id,
-            name: bp.product_name,
-            quantity: bp.product_quantity,
-        };
-        let materials = all_materials
-            .get(&bp.blueprint_type_id)
-            .cloned()
-            .unwrap_or_default();
-        needed.insert(product.product_type_id);
-
-        let mut step = manufacturing_step(bp.blueprint_type_id, &product, &materials);
-        // Recursively resolve each material into a build-or-buy sub-tree.
-        let mut path = vec![product.product_type_id];
-        let mut inputs = Vec::with_capacity(materials.len());
-        for m in &materials {
-            inputs.push(resolve_input(
-                &sde,
-                &mut recipe_cache,
-                &mut needed,
-                m.material_type_id,
-                m.name.clone(),
-                m.quantity,
-                MAX_TREE_DEPTH,
-                params.build_components,
-                &params.ignore_build_groups,
-                &mut path,
-            )?);
+        // A missing invention probability row causes build_step_for_bp to
+        // return Ok(None), which the catalog ranking skips (#811).
+        if let Some(step) = build_step_for_bp(
+            &sde,
+            &all_materials,
+            &all_invention,
+            decryptor.as_ref(),
+            &bp,
+            &params,
+            &mut needed,
+            &mut recipe_cache,
+        )? {
+            steps.push(step);
         }
-        step.inputs = inputs;
-        // T2 items: attach the invention so its expected cost is amortized in.
-        if let Some(inv) = all_invention.get(&bp.blueprint_type_id) {
-            // A missing industryActivityProbabilities row is an SDE data gap,
-            // not a legitimate 0% invention chance (downstream cost math
-            // divides by probability * runs_per_success). Skip this
-            // blueprint out of the ranking entirely rather than rank it
-            // with a fabricated probability (#811).
-            let Some(base_probability) = inv.probability else {
-                continue;
-            };
-            // T1 product's manufacturing materials estimate the copy job fee.
-            let copy_materials = all_materials
-                .get(&inv.inventing_blueprint_type_id)
-                .cloned()
-                .unwrap_or_default();
-            needed.extend(inv.datacores.iter().map(|d| d.material_type_id));
-            needed.extend(copy_materials.iter().map(|m| m.material_type_id));
-            let to_input = |m: &crate::sde::BlueprintMaterial| InputLine {
-                type_id: m.material_type_id,
-                name: m.name.clone(),
-                base_quantity: m.quantity,
-                sourcing: Sourcing::Buy,
-            };
-            // A decryptor shifts ME/runs/probability and is consumed per attempt.
-            let mut datacores: Vec<InputLine> = inv.datacores.iter().map(to_input).collect();
-            // T3 invention consumes an Ancient Relic bought at market; price it in
-            // as a per-attempt input (it has no copy fee — relics aren't copied).
-            if let Some(relic) = &inv.relic {
-                needed.insert(relic.material_type_id);
-                datacores.push(to_input(relic));
-            }
-            let (result_me, runs_per_success, probability) = match &decryptor {
-                Some(d) => {
-                    needed.insert(d.type_id);
-                    datacores.push(InputLine {
-                        type_id: d.type_id,
-                        name: d.name.clone(),
-                        base_quantity: 1,
-                        sourcing: Sourcing::Buy,
-                    });
-                    (
-                        BASE_T2_ME + d.me_modifier,
-                        inv.runs_per_success + d.run_modifier,
-                        base_probability * d.probability_multiplier,
-                    )
-                }
-                None => (BASE_T2_ME, inv.runs_per_success, base_probability),
-            };
-            step.invention = Some(Invention {
-                datacores,
-                copy_materials: copy_materials.iter().map(to_input).collect(),
-                runs_per_success,
-                probability,
-                result_me,
-                base_blueprint_type_id: inv.inventing_blueprint_type_id,
-            });
-        }
-        steps.push(step);
     }
     let ids: Vec<i64> = needed.into_iter().collect();
 
@@ -384,34 +585,7 @@ pub async fn production_profit(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Invention probability multiplier from skills (1 + L/40 + 2L/30); all-V ≈ 1.458.
-    let skill = params.invention_skill_level.unwrap_or(5).clamp(0, 5) as f64;
-    let invention_skill_multiplier = 1.0 + skill / 40.0 + 2.0 * skill / 30.0;
-    let config = ProfitConfig {
-        system_cost_index: params.system_cost_index,
-        facility_tax: params.facility_tax,
-        material_basis: params.material_basis.unwrap_or(PriceBasis::SellPercentile),
-        product_basis: params.product_basis.unwrap_or(PriceBasis::SellPercentile),
-        blueprint_cost_per_run: params.blueprint_cost_per_run,
-        invention_skill_multiplier,
-        me_bonus: params.me_bonus,
-        cost_bonus: params.cost_bonus,
-        structure_te_pct: params.structure_te_pct,
-        role_bonus_time: params
-            .facility_profiles
-            .as_ref()
-            .map(|p| p.reaction.role_bonus_time)
-            .unwrap_or(0.0),
-        scc_surcharge: params.scc_surcharge,
-        include_sales_cost: params.include_sales_cost,
-        sales_tax: params.sales_tax,
-        broker_fee: params.broker_fee,
-        facility_profiles: params.facility_profiles.clone(),
-        implant: params.implant.clone(),
-        owned_me: params.owned_me.clone(),
-        owned_te: params.owned_te.clone(),
-        component_me: params.component_me,
-    };
+    let config = make_profit_config(&params);
 
     let meta = crate::sde::cached_meta_group_names(&dir)?;
     let categories = crate::sde::cached_category_names(&dir)?;
@@ -440,124 +614,25 @@ pub async fn production_profit(
     let mfg_te_bonus_pct = config.te_bonus_pct_for(super::engine::Activity::Manufacturing);
     let mfg_te_mult = 1.0 - mfg_te_bonus_pct / 100.0;
 
-    // Walk a build tree and sum the reaction-job time (seconds) for all
-    // Reaction sub-steps. Reactions get no Industry-skill bonus, but do get
-    // the reaction facility's TE bonus and role-bonus time (Tatara −25%).
-    fn reaction_time_for_step(
-        step: &BuildStep,
-        base_times_rxn: &HashMap<i64, i64>,
-        params: &ProfitParams,
-        config: &ProfitConfig,
-        runs: i64,
-        depth: u32,
-    ) -> f64 {
-        if depth == 0 {
-            return 0.0;
-        }
-        let mut total = 0.0;
-        if step.activity == super::engine::Activity::Reaction {
-            if let Some(&base) = base_times_rxn.get(&step.blueprint_type_id) {
-                let te = params
-                    .owned_te
-                    .get(&step.blueprint_type_id)
-                    .copied()
-                    .unwrap_or(params.te);
-                let te_bonus = config.te_bonus_pct_for_step(step);
-                let role_bonus = config.role_bonus_time_for_step(step);
-                // Reaction time = base × runs × (1 − blueprint_TE) × (1 − facility_TE) × (1 − role_bonus)
-                total += base as f64
-                    * runs as f64
-                    * (1.0 - te as f64 / 100.0)
-                    * (1.0 - te_bonus / 100.0)
-                    * (1.0 - role_bonus);
-            }
-        }
-        for input in &step.inputs {
-            if let Sourcing::Build(sub) = &input.sourcing {
-                total +=
-                    reaction_time_for_step(sub, base_times_rxn, params, config, runs, depth - 1);
-            }
-        }
-        total
-    }
-
     let mut out: Vec<ProfitBreakdown> = steps
         .iter()
         .map(|step| {
-            // Owned blueprints use their researched ME; everything else the global
-            // ME slider. But for COMPONENT build steps (is_component), fall back
-            // to the shared `component_me` (one ME for all components) instead —
-            // T2/T3 rows still override with the invented BPC's ME in evaluate.
-            let step_me = if step.is_component {
-                params
-                    .owned_me
-                    .get(&step.blueprint_type_id)
-                    .copied()
-                    .unwrap_or(params.component_me)
-            } else {
-                params
-                    .owned_me
-                    .get(&step.blueprint_type_id)
-                    .copied()
-                    .unwrap_or(params.me)
-            };
-            let mut bd = evaluate_with_stock(
+            fill_breakdown(
                 step,
-                params.runs,
-                step_me,
-                prices.as_map(),
-                &config,
-                &params.stock,
-            );
-            // Manufacturing job time = base × runs × (1 − TE/100) × skill × facility_TE.
-            // Components use the shared `component_te` fallback — one TE for all.
-            let te = if step.is_component {
-                params
-                    .owned_te
-                    .get(&step.blueprint_type_id)
-                    .copied()
-                    .unwrap_or(params.component_te)
-            } else {
-                params
-                    .owned_te
-                    .get(&step.blueprint_type_id)
-                    .copied()
-                    .unwrap_or(params.te)
-            };
-            if let Some(&base) = base_times.get(&step.blueprint_type_id) {
-                let time = base as f64
-                    * params.runs as f64
-                    * (1.0 - te as f64 / 100.0)
-                    * time_skill_mult
-                    * mfg_te_mult;
-                bd.job_time_seconds = time;
-                bd.manufacturing_time_seconds = time;
-            }
-            // Reaction sub-build time (walk the tree).
-            bd.reaction_time_seconds = reaction_time_for_step(
-                step,
-                &base_times_rxn,
                 &params,
                 &config,
-                params.runs,
-                MAX_TREE_DEPTH,
-            );
-            bd.meta_group = Some(
-                meta.get(&bd.product_type_id)
-                    .cloned()
-                    .unwrap_or_else(|| "Tech I".to_string()),
-            );
-            bd.category = categories.get(&bd.product_type_id).cloned();
-            bd.group = groups.get(&bd.product_type_id).cloned();
-            if let Some(inv) = bd.invention.as_mut() {
-                inv.base_blueprint_name = base_bp_names
-                    .get(&inv.base_blueprint_type_id)
-                    .cloned()
-                    .unwrap_or_default();
-            }
-            bd.market = Some(market_name.clone());
-            bd.favorite = favorites.contains(&bd.blueprint_type_id);
-            bd
+                prices.as_map(),
+                &market_name,
+                &favorites,
+                &meta,
+                &categories,
+                &groups,
+                &base_bp_names,
+                &base_times,
+                &base_times_rxn,
+                time_skill_mult,
+                mfg_te_mult,
+            )
         })
         .collect();
 
@@ -569,20 +644,7 @@ pub async fn production_profit(
             .best_sell_hubs(&product_ids)
             .await
             .map_err(|e| e.to_string())?;
-        // Same revenue basis the engine used, so repriced and untouched rows
-        // stay comparable.
-        let sales_cost = if params.include_sales_cost {
-            params.sales_tax + params.broker_fee
-        } else {
-            0.0
-        };
-        for bd in &mut out {
-            if let Some(b) = best.get(&bd.product_type_id) {
-                if b.price > bd.product_price.unwrap_or(0.0) {
-                    reprice_product(bd, b.price, &b.hub, sales_cost);
-                }
-            }
-        }
+        reprice_at_best_hubs(&mut out, &best, &params);
     }
 
     out.sort_by(|a, b| {
@@ -591,6 +653,164 @@ pub async fn production_profit(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     Ok(out)
+}
+
+/// One manufacturable blueprint matched by a name search.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct BlueprintSearchResult {
+    /// The blueprint type id to pass to `production_profit_for_blueprint`.
+    pub type_id: i64,
+    /// The product name the user searched for (e.g. "Hecate").
+    pub name: String,
+}
+
+/// Search manufacturable blueprints by product name (case-insensitive,
+/// multi-term AND). Returns short results for the Build Planner picker.
+#[tauri::command]
+#[specta::specta]
+pub fn production_search_blueprints(
+    app: AppHandle,
+    query: String,
+    limit: i64,
+) -> Result<Vec<BlueprintSearchResult>, AppError> {
+    let sde = crate::sde::open_from_app(&app)?;
+    let rows = sde
+        .search_manufacturable_blueprints(&query, limit)
+        .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|(type_id, name, _qty)| BlueprintSearchResult { type_id, name })
+        .collect())
+}
+
+/// Price a **single** blueprint and return its full build-vs-buy breakdown.
+///
+/// This is the Build Planner entry point: same calculation engine as
+/// `production_profit` (profit = product value − material cost − job fees),
+/// but scoped to one `blueprint_type_id` instead of the entire catalogue.
+/// The returned `ProfitBreakdown` includes `materials` (with stock-adjusted
+/// shortfall), `reactions` (ReactionPlan with runs per formula), `invention`
+/// (for T2), and timing.
+#[tauri::command]
+#[specta::specta]
+pub async fn production_profit_for_blueprint(
+    app: AppHandle,
+    market: State<'_, MarketService>,
+    blueprint_type_id: i64,
+    params: ProfitParams,
+) -> Result<ProfitBreakdown, AppError> {
+    let (dir, sde) = crate::sde::dir_and_sde(&app)?;
+
+    // Favorites are checked for the single blueprint's identity.
+    let (_blacklist, favorites) =
+        lists::load_filter_sets(&dir, PRODUCTION_BLACKLIST_KEY, PRODUCTION_FAVORITES_KEY);
+
+    // Resolve the chosen decryptor (if any) once up front.
+    let decryptor = match params.decryptor_type_id {
+        Some(id) => sde
+            .decryptors()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|d| d.type_id == id),
+        None => None,
+    };
+
+    let all_materials = sde.all_blueprint_materials().map_err(|e| e.to_string())?;
+    let all_invention = sde.all_invention_products().map_err(|e| e.to_string())?;
+
+    // Find the single blueprint in the manufacturable catalogue.
+    let bp = sde
+        .manufacturable_blueprints()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|bp| bp.blueprint_type_id == blueprint_type_id)
+        .ok_or_else(|| {
+            AppError::from(format!(
+                "No manufacturable blueprint for type id {}",
+                blueprint_type_id
+            ))
+        })?;
+
+    let mut needed = HashSet::new();
+    let mut recipe_cache: HashMap<i64, Option<Recipe>> = HashMap::new();
+    let step = build_step_for_bp(
+        &sde,
+        &all_materials,
+        &all_invention,
+        decryptor.as_ref(),
+        &bp,
+        &params,
+        &mut needed,
+        &mut recipe_cache,
+    )?
+    .ok_or_else(|| {
+        AppError::from(format!(
+            "Blueprint {} has no valid invention probability — cannot price",
+            blueprint_type_id
+        ))
+    })?;
+
+    let ids: Vec<i64> = needed.into_iter().collect();
+
+    // Price everything at the chosen location.
+    let location = resolve_location(params.region_id, params.station_id);
+    let market_name = location_label(params.region_id, params.station_id);
+    let prices = market
+        .price_map_at(location, &ids)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let config = make_profit_config(&params);
+
+    let meta = crate::sde::cached_meta_group_names(&dir)?;
+    let categories = crate::sde::cached_category_names(&dir)?;
+    let groups = crate::sde::cached_group_names(&dir)?;
+    let base_times = sde.base_times(1).map_err(|e| e.to_string())?; // 1 = manufacturing
+    let base_times_rxn = sde.base_times(11).map_err(|e| e.to_string())?; // 11 = reaction
+    let base_bp_ids: Vec<i64> = step
+        .invention
+        .as_ref()
+        .map(|i| vec![i.base_blueprint_type_id])
+        .unwrap_or_default();
+    let base_bp_names: HashMap<i64, String> = sde
+        .type_names(&base_bp_ids)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .collect();
+
+    let l = params.time_skill.clamp(0, 5) as f64;
+    let time_skill_mult = (1.0 - 0.04 * l) * (1.0 - 0.03 * l);
+    let mfg_te_bonus_pct = config.te_bonus_pct_for(super::engine::Activity::Manufacturing);
+    let mfg_te_mult = 1.0 - mfg_te_bonus_pct / 100.0;
+
+    let mut bd = fill_breakdown(
+        &step,
+        &params,
+        &config,
+        prices.as_map(),
+        &market_name,
+        &favorites,
+        &meta,
+        &categories,
+        &groups,
+        &base_bp_names,
+        &base_times,
+        &base_times_rxn,
+        time_skill_mult,
+        mfg_te_mult,
+    );
+
+    // "Sell at best hub": re-price the single product at whichever hub pays the most.
+    if params.product_best_hub {
+        let best = market
+            .best_sell_hubs(&[bd.product_type_id])
+            .await
+            .map_err(|e| e.to_string())?;
+        reprice_at_best_hubs(std::slice::from_mut(&mut bd), &best, &params);
+    }
+
+    Ok(bd)
 }
 
 /// Re-price a breakdown's product at `unit_price` (the best hub's sell price)
@@ -952,6 +1172,8 @@ pub fn production_station_security(
 pub fn specta_commands() -> tauri_specta::Commands<tauri::Wry> {
     tauri_specta::collect_commands![
         production_profit,
+        production_profit_for_blueprint,
+        production_search_blueprints,
         production_decryptors,
         production_get_list,
         production_set_list,

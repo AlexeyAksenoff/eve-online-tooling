@@ -19,7 +19,11 @@ export function ProductionPage() {
 
 function Workbench() {
   const wb = useWorkbench();
-  const { update, calculate, profit } = wb;
+  const { update, calculate, profit, view, buildProfit } = wb;
+
+  // In Build Planner view, the wizard has its own Calculate button;
+  // the header just shows "Update data".
+  const isBuildPlanner = view === "build_planner";
 
   return (
     <Page>
@@ -43,19 +47,30 @@ function Workbench() {
                       : "Up to date ✓"
                     : "Update data"}
               </button>
-              <PrimaryButton
-                onClick={calculate}
-                disabled={profit.isPending}
-                pending={profit.isPending}
-                pendingLabel="Calculating…"
-              >
-                Calculate
-              </PrimaryButton>
+              {!isBuildPlanner && (
+                <PrimaryButton
+                  onClick={calculate}
+                  disabled={profit.isPending}
+                  pending={profit.isPending}
+                  pendingLabel="Calculating…"
+                >
+                  Calculate
+                </PrimaryButton>
+              )}
             </div>
-            <DataAge
-              updatedAt={profit.isSuccess ? profit.submittedAt : undefined}
-              fetching={profit.isPending}
-            />
+            {!isBuildPlanner ? (
+              <DataAge
+                updatedAt={profit.isSuccess ? profit.submittedAt : undefined}
+                fetching={profit.isPending}
+              />
+            ) : (
+              <DataAge
+                updatedAt={
+                  buildProfit.isSuccess ? buildProfit.submittedAt : undefined
+                }
+                fetching={buildProfit.isPending}
+              />
+            )}
           </>
         }
       />

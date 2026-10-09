@@ -7,168 +7,157 @@
 
 /** user-defined commands **/
 
+
 export const commands = {
-  /**
-   * Rank **every** manufacturable item by build-vs-buy profit at the chosen
-   * market. The whole catalogue is returned; the UI filters it client-side.
-   */
-  async productionProfit(
-    params: ProfitParams,
-  ): Promise<Result<ProfitBreakdown[], AppError>> {
+/**
+ * Rank **every** manufacturable item by build-vs-buy profit at the chosen
+ * market. The whole catalogue is returned; the UI filters it client-side.
+ */
+async productionProfit(params: ProfitParams) : Promise<Result<ProfitBreakdown[], AppError>> {
     try {
-      return {
-        status: "ok",
-        data: await TAURI_INVOKE("production_profit", { params }),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: "error", error: e as AppError };
-    }
-  },
-  /**
-   * The invention decryptors (for the UI dropdown).
-   */
-  async productionDecryptors(): Promise<Result<Decryptor[], AppError>> {
+    return { status: "ok", data: await TAURI_INVOKE("production_profit", { params }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as AppError };
+}
+},
+/**
+ * Price a **single** blueprint and return its full build-vs-buy breakdown.
+ * 
+ * This is the Build Planner entry point: same calculation engine as
+ * `production_profit` (profit = product value − material cost − job fees),
+ * but scoped to one `blueprint_type_id` instead of the entire catalogue.
+ * The returned `ProfitBreakdown` includes `materials` (with stock-adjusted
+ * shortfall), `reactions` (ReactionPlan with runs per formula), `invention`
+ * (for T2), and timing.
+ */
+async productionProfitForBlueprint(blueprintTypeId: number, params: ProfitParams) : Promise<Result<ProfitBreakdown, AppError>> {
     try {
-      return {
-        status: "ok",
-        data: await TAURI_INVOKE("production_decryptors"),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: "error", error: e as AppError };
-    }
-  },
-  /**
-   * The contents of a production saved list (`blacklist` or `favorites`), with
-   * names. Ids are blueprint type ids.
-   */
-  async productionGetList(list: string): Promise<Result<ListItem[], AppError>> {
+    return { status: "ok", data: await TAURI_INVOKE("production_profit_for_blueprint", { blueprintTypeId, params }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as AppError };
+}
+},
+/**
+ * Search manufacturable blueprints by product name (case-insensitive,
+ * multi-term AND). Returns short results for the Build Planner picker.
+ */
+async productionSearchBlueprints(query: string, limit: number) : Promise<Result<BlueprintSearchResult[], AppError>> {
     try {
-      return {
-        status: "ok",
-        data: await TAURI_INVOKE("production_get_list", { list }),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: "error", error: e as AppError };
-    }
-  },
-  /**
-   * Add or remove a blueprint type from a production saved list.
-   */
-  async productionSetList(
-    list: string,
-    typeId: number,
-    add: boolean,
-  ): Promise<Result<null, AppError>> {
+    return { status: "ok", data: await TAURI_INVOKE("production_search_blueprints", { query, limit }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as AppError };
+}
+},
+/**
+ * The invention decryptors (for the UI dropdown).
+ */
+async productionDecryptors() : Promise<Result<Decryptor[], AppError>> {
     try {
-      return {
-        status: "ok",
-        data: await TAURI_INVOKE("production_set_list", { list, typeId, add }),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: "error", error: e as AppError };
-    }
-  },
-  /**
-   * The **manufacturing** cost index CCP applies to job fees in a solar system,
-   * from ESI `/industry/systems/` (public). The full list is fetched once and
-   * cached ~1h on disk, then looked up per system. `None` when the system isn't
-   * listed (e.g. wormhole space). Lets the production tab use the real index
-   * instead of a hand-entered guess. When the refresh fails but a map ≤24h past
-   * expiry sits on disk, the stale map is served instead of an error via the
-   * shared [`deduplicated_cached_fetch_with_stale_fallback`] helper (#774, #888).
-   */
-  async productionSystemCostIndex(
-    systemId: number,
-  ): Promise<Result<number | null, AppError>> {
+    return { status: "ok", data: await TAURI_INVOKE("production_decryptors") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as AppError };
+}
+},
+/**
+ * The contents of a production saved list (`blacklist` or `favorites`), with
+ * names. Ids are blueprint type ids.
+ */
+async productionGetList(list: string) : Promise<Result<ListItem[], AppError>> {
     try {
-      return {
-        status: "ok",
-        data: await TAURI_INVOKE("production_system_cost_index", { systemId }),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: "error", error: e as AppError };
-    }
-  },
-  /**
-   * The raw SDE solar-system security (−1.0 … +1.0) for the system an NPC
-   * station sits in, resolved via `staStations → mapSolarSystems`. `None` when
-   * the station isn't in `staStations` (e.g. an Upwell structure) or the
-   * system is unknown — the caller falls back to region-based detection for
-   * WH space.
-   */
-  async productionStationSecurity(
-    stationId: number,
-  ): Promise<Result<number | null, AppError>> {
+    return { status: "ok", data: await TAURI_INVOKE("production_get_list", { list }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as AppError };
+}
+},
+/**
+ * Add or remove a blueprint type from a production saved list.
+ */
+async productionSetList(list: string, typeId: number, add: boolean) : Promise<Result<null, AppError>> {
     try {
-      return {
-        status: "ok",
-        data: await TAURI_INVOKE("production_station_security", { stationId }),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: "error", error: e as AppError };
-    }
-  },
-  /**
-   * All industry rigs for one facility type, readable right now. Rigs are
-   * filtered to those whose slot size exactly matches `max_rig_size` (the size
-   * of the slot the chosen structure exposes — a rig only fits a slot of its
-   * own size). `"reaction"` → refinery/reactor rigs (`RefRig*` dogma attrs,
-   * reduce reactant usage & reaction time); `"manufacturing"`/`"components"` →
-   * engineering rigs (`EngRig*` attrs). Bonuses are the base (un-scaled)
-   * percentages; [`production_rig_bonuses`] security-scales them on selection.
-   */
-  async productionRigs(
-    facilityType: FacilityType,
-    maxRigSize: number,
-  ): Promise<Result<RigTypeInfo[], AppError>> {
+    return { status: "ok", data: await TAURI_INVOKE("production_set_list", { list, typeId, add }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as AppError };
+}
+},
+/**
+ * The **manufacturing** cost index CCP applies to job fees in a solar system,
+ * from ESI `/industry/systems/` (public). The full list is fetched once and
+ * cached ~1h on disk, then looked up per system. `None` when the system isn't
+ * listed (e.g. wormhole space). Lets the production tab use the real index
+ * instead of a hand-entered guess. When the refresh fails but a map ≤24h past
+ * expiry sits on disk, the stale map is served instead of an error via the
+ * shared [`deduplicated_cached_fetch_with_stale_fallback`] helper (#774, #888).
+ */
+async productionSystemCostIndex(systemId: number) : Promise<Result<number | null, AppError>> {
     try {
-      return {
-        status: "ok",
-        data: await TAURI_INVOKE("production_rigs", {
-          facilityType,
-          maxRigSize,
-        }),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: "error", error: e as AppError };
-    }
-  },
-  /**
-   * Resolve selected rig type IDs + facility security tier into
-   * `(meBonus, teBonusPct, costBonusPct)` — same contract as the engine's
-   * `rig_bonuses_from_ids`. Legacy rigs (1955-1978) use the built-in bonus
-   * table; any other Standup rig has its bonus read from the SDE dogma attrs
-   * and security-scaled by the rig's own modifiers (see [`sde_rig_bonus`]).
-   */
-  async productionRigBonuses(
-    rigTypeIds: number[],
-    securityTier: SecurityTier,
-  ): Promise<Result<[number, number, number], AppError>> {
+    return { status: "ok", data: await TAURI_INVOKE("production_system_cost_index", { systemId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as AppError };
+}
+},
+/**
+ * The raw SDE solar-system security (−1.0 … +1.0) for the system an NPC
+ * station sits in, resolved via `staStations → mapSolarSystems`. `None` when
+ * the station isn't in `staStations` (e.g. an Upwell structure) or the
+ * system is unknown — the caller falls back to region-based detection for
+ * WH space.
+ */
+async productionStationSecurity(stationId: number) : Promise<Result<number | null, AppError>> {
     try {
-      return {
-        status: "ok",
-        data: await TAURI_INVOKE("production_rig_bonuses", {
-          rigTypeIds,
-          securityTier,
-        }),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: "error", error: e as AppError };
-    }
-  },
-};
+    return { status: "ok", data: await TAURI_INVOKE("production_station_security", { stationId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as AppError };
+}
+},
+/**
+ * All industry rigs for one facility type, readable right now. Rigs are
+ * filtered to those whose slot size exactly matches `max_rig_size` (the size
+ * of the slot the chosen structure exposes — a rig only fits a slot of its
+ * own size). `"reaction"` → refinery/reactor rigs (`RefRig*` dogma attrs,
+ * reduce reactant usage & reaction time); `"manufacturing"`/`"components"` →
+ * engineering rigs (`EngRig*` attrs). Bonuses are the base (un-scaled)
+ * percentages; [`production_rig_bonuses`] security-scales them on selection.
+ */
+async productionRigs(facilityType: FacilityType, maxRigSize: number) : Promise<Result<RigTypeInfo[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("production_rigs", { facilityType, maxRigSize }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as AppError };
+}
+},
+/**
+ * Resolve selected rig type IDs + facility security tier into
+ * `(meBonus, teBonusPct, costBonusPct)` — same contract as the engine's
+ * `rig_bonuses_from_ids`. Legacy rigs (1955-1978) use the built-in bonus
+ * table; any other Standup rig has its bonus read from the SDE dogma attrs
+ * and security-scaled by the rig's own modifiers (see [`sde_rig_bonus`]).
+ */
+async productionRigBonuses(rigTypeIds: number[], securityTier: SecurityTier) : Promise<Result<[number, number, number], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("production_rig_bonuses", { rigTypeIds, securityTier }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as AppError };
+}
+}
+}
 
 /** user-defined events **/
 
+
+
 /** user-defined constants **/
+
+
 
 /** user-defined types **/
 
@@ -177,615 +166,562 @@ export const commands = {
  * `{ "kind": …, "message": … }` so the frontend can tell an auth-required
  * state apart from a generic failure and show a clearer message, rather than
  * pattern-matching on a raw error string.
- *
+ * 
  * Commands return `Result<T, AppError>`; because `AppError: From<String>`, an
  * existing `.map_err(|e| e.to_string())?` inside such a command still works —
  * `?` wraps the string as [`AppError::Message`].
  */
-export type AppError =
-  /**
-   * No character is logged in, or a required ESI scope isn't granted.
-   */
-  | { kind: "authRequired"; message: string }
-  /**
-   * Any other failure, carrying a human-readable message.
-   */
-  | { kind: "message"; message: string };
+export type AppError = 
+/**
+ * No character is logged in, or a required ESI scope isn't granted.
+ */
+{ kind: "authRequired"; message: string } | 
+/**
+ * Any other failure, carrying a human-readable message.
+ */
+{ kind: "message"; message: string }
+/**
+ * One manufacturable blueprint matched by a name search.
+ */
+export type BlueprintSearchResult = { 
+/**
+ * The blueprint type id to pass to `production_profit_for_blueprint`.
+ */
+typeId: number; 
+/**
+ * The product name the user searched for (e.g. "Hecate").
+ */
+name: string }
 /**
  * An invention decryptor and its outcome modifiers (read from the SDE).
  */
-export type Decryptor = {
-  typeId: number;
-  name: string;
-  /**
-   * Multiplier on invention success probability.
-   */
-  probabilityMultiplier: number;
-  /**
-   * Added to the invented T2 BPC's material efficiency.
-   */
-  meModifier: number;
-  /**
-   * Added to runs per successful invention.
-   */
-  runModifier: number;
-};
+export type Decryptor = { typeId: number; name: string; 
+/**
+ * Multiplier on invention success probability.
+ */
+probabilityMultiplier: number; 
+/**
+ * Added to the invented T2 BPC's material efficiency.
+ */
+meModifier: number; 
+/**
+ * Added to runs per successful invention.
+ */
+runModifier: number }
 /**
  * A production-capacity profile: the facility a job runs in, with its
  * structure/rig/security bonuses composed. One profile per facility type
  * (manufacturing vs. reaction); passed through the recursive build-vs-buy
  * tree so each step is costed against the right facility.
- *
+ * 
  * The `me_bonus`/`te_bonus_pct`/`cost_bonus` fields here are the **final
  * composed multipliers** (structure × rig), not raw rig percentages — the
  * frontend computes them the same way `composeStructureBonuses` does today
  * and hands them in pre-composed, so the engine stays flat and pure.
  */
-export type FacilityProfile = {
-  /**
-   * Which activity this profile applies to (drives structure preset).
-   */
-  facilityType: FacilityType;
-  /**
-   * The structure type (Raitaru, Tatara, etc.) or NPC station.
-   */
-  structure: StructureType;
-  /**
-   * Security tier of the system (determines approximate-ness).
-   */
-  security: SecurityTier;
-  /**
-   * Combined structure+rig material multiplier (e.g. 0.97 = −3%).
-   */
-  meBonus: number;
-  /**
-   * Combined structure+rig TE bonus in percent (e.g. 20 = −20% time).
-   */
-  teBonusPct: number;
-  /**
-   * Combined structure+rig cost saving on cost-index portion (fraction).
-   */
-  costBonus: number;
-  /**
-   * Tatara role-bonus time multiplier (0.25 for Tatara, 0 otherwise).
-   */
-  roleBonusTime: number;
-  /**
-   * Selected rig type IDs (from the `production_manufacturing_rigs` list).
-   * The frontend sends these; the engine computes ME/TE/cost via
-   * [`rig_bonuses_from_ids`] and folds them into the bonuses above.
-   */
-  rigTypeIds: number[];
-  /**
-   * System cost index (0..1), or `None` for WH (manual override).
-   */
-  systemCostIndex: number | null;
-  /**
-   * Facility tax rate (0..1), or `None` for manual override.
-   */
-  taxRate: number | null;
-};
+export type FacilityProfile = { 
+/**
+ * Which activity this profile applies to (drives structure preset).
+ */
+facilityType: FacilityType; 
+/**
+ * The structure type (Raitaru, Tatara, etc.) or NPC station.
+ */
+structure: StructureType; 
+/**
+ * Security tier of the system (determines approximate-ness).
+ */
+security: SecurityTier; 
+/**
+ * Combined structure+rig material multiplier (e.g. 0.97 = −3%).
+ */
+meBonus: number; 
+/**
+ * Combined structure+rig TE bonus in percent (e.g. 20 = −20% time).
+ */
+teBonusPct: number; 
+/**
+ * Combined structure+rig cost saving on cost-index portion (fraction).
+ */
+costBonus: number; 
+/**
+ * Tatara role-bonus time multiplier (0.25 for Tatara, 0 otherwise).
+ */
+roleBonusTime: number; 
+/**
+ * Selected rig type IDs (from the `production_manufacturing_rigs` list).
+ * The frontend sends these; the engine computes ME/TE/cost via
+ * [`rig_bonuses_from_ids`] and folds them into the bonuses above.
+ */
+rigTypeIds: number[]; 
+/**
+ * System cost index (0..1), or `None` for WH (manual override).
+ */
+systemCostIndex: number | null; 
+/**
+ * Facility tax rate (0..1), or `None` for manual override.
+ */
+taxRate: number | null }
 /**
  * A triple of facility profiles: manufacturing, components, and reaction.
  * Passed through the build-vs-buy tree so each `Activity::Manufacturing`
  * node uses the manufacturing or components facility (depending on whether
  * it's a top-level product or a sub-component) and each `Activity::Reaction`
  * node uses the reaction facility.
- *
+ * 
  * `components` is always a manufacturing-type facility (NPC station or
  * Upwell manufacturing structure) — it just has its own cost index, tax,
  * and rig bonus set because components are often built at a different
  * location than the final product.
- *
+ * 
  * Field order matches the Facilities tab button order (Manufacturing |
  * Components | Reaction). `reaction` is last because refinery/reactor rigs
  * are structurally distinct from engineering (manufacturing) rigs.
  */
-export type FacilityProfiles = {
-  manufacturing: FacilityProfile;
-  components: FacilityProfile;
-  reaction: FacilityProfile;
-};
+export type FacilityProfiles = { manufacturing: FacilityProfile; components: FacilityProfile; reaction: FacilityProfile }
 /**
  * Facility type for a [`FacilityProfile`]. Manufacturing profiles use
  * Upwell-structures or NPC stations; reaction profiles use Athanor/Tatara.
  * Component profiles apply to sub-build steps that are components of a larger
  * product (T2/T3 ship components, built at a different facility with different rigs).
  */
-export type FacilityType = "manufacturing" | "reaction" | "components";
+export type FacilityType = "manufacturing" | "reaction" | "components"
 /**
  * Character implant or facility module bonus that applies on top of the
  * facility profile's bonuses. EVE Online has several implants (e.g.
  * Eifyr 'Guns' series) and facility modules that reduce manufacturing time
  * and/or material costs — these are character/facility-level, not rig-level.
- *
+ * 
  * Bonuses are additive within their category and applied multiplicatively
  * against the facility-derived totals:
  * - `time_bonus_pct`: additional time reduction % (stacks with TE bonus).
  * - `material_bonus`: additional ME multiplier (e.g. 0.99 = −1% materials,
  * multiplicative with the facility ME bonus).
  * - `cost_bonus_pct`: additional cost-index reduction % (additive with TE bonus).
- *
+ * 
  * `None` means no implant/module configured — equivalent to zero bonuses.
  */
-export type ImplantBonus = {
-  /**
-   * Additional manufacturing time reduction (percent, e.g. 4.0 = −4%).
-   * Applied as a multiplier on top of the facility TE bonus.
-   */
-  timeBonusPct: number;
-  /**
-   * Additional material efficiency multiplier (e.g. 0.99 = −1%).
-   * Applied multiplicatively with the facility ME bonus.
-   */
-  materialBonus: number;
-  /**
-   * Additional job-fee cost reduction (percent, e.g. 2.0 = −2%).
-   * Applied as an additional saving on the cost-index portion.
-   */
-  costBonusPct: number;
-};
+export type ImplantBonus = { 
+/**
+ * Additional manufacturing time reduction (percent, e.g. 4.0 = −4%).
+ * Applied as a multiplier on top of the facility TE bonus.
+ */
+timeBonusPct: number; 
+/**
+ * Additional material efficiency multiplier (e.g. 0.99 = −1%).
+ * Applied multiplicatively with the facility ME bonus.
+ */
+materialBonus: number; 
+/**
+ * Additional job-fee cost reduction (percent, e.g. 2.0 = −2%).
+ * Applied as an additional saving on the cost-index portion.
+ */
+costBonusPct: number }
 /**
  * Invention cost detail for the drill-down (T2 items).
  */
-export type InventionBreakdown = {
-  /**
-   * Datacores consumed per attempt (quantity, unit price, cost).
-   */
-  datacores: MaterialLine[];
-  datacoreCost: number;
-  inventionJobFee: number;
-  /**
-   * Copy job fee for the T1 BPC consumed each attempt.
-   */
-  copyFee: number;
-  attemptCost: number;
-  /**
-   * Skill-adjusted success probability (0..1).
-   */
-  probability: number;
-  runsPerSuccess: number;
-  /**
-   * Invention cost per produced unit-run = attempt_cost / (probability × runs).
-   */
-  perUnit: number;
-  /**
-   * The T1 blueprint invented from — id + name, so the UI can show what a
-   * T2 item's invention is actually based on. Name is filled by the command
-   * layer from the SDE; the pure engine leaves it empty.
-   */
-  baseBlueprintTypeId: number;
-  baseBlueprintName: string;
-};
+export type InventionBreakdown = { 
+/**
+ * Datacores consumed per attempt (quantity, unit price, cost).
+ */
+datacores: MaterialLine[]; datacoreCost: number; inventionJobFee: number; 
+/**
+ * Copy job fee for the T1 BPC consumed each attempt.
+ */
+copyFee: number; attemptCost: number; 
+/**
+ * Skill-adjusted success probability (0..1).
+ */
+probability: number; runsPerSuccess: number; 
+/**
+ * Invention cost per produced unit-run = attempt_cost / (probability × runs).
+ */
+perUnit: number; 
+/**
+ * The T1 blueprint invented from — id + name, so the UI can show what a
+ * T2 item's invention is actually based on. Name is filled by the command
+ * layer from the SDE; the pure engine leaves it empty.
+ */
+baseBlueprintTypeId: number; baseBlueprintName: string }
 /**
  * An item on a saved list, resolved to its display name.
  */
-export type ListItem = { typeId: number; name: string };
+export type ListItem = { typeId: number; name: string }
 /**
  * Per-material cost line for the UI drill-down.
  */
-export type MaterialLine = {
-  typeId: number;
-  name: string;
-  requiredQuantity: number;
-  /**
-   * Units covered from owned stock (#41); `line_cost` only pays the shortfall.
-   */
-  have: number;
-  /**
-   * Unit cost used (the cheaper of build vs buy when buildable).
-   */
-  unitPrice: number | null;
-  lineCost: number;
-  /**
-   * True when building this input is cheaper than buying it.
-   */
-  built: boolean;
-  /**
-   * Excess units produced by a build sub-step when
-   * `sub.product_per_run × runs_needed` exceeds the required quantity
-   * (partial-run over-production — e.g. a 10-run BPC producing 1 unit
-   * when only 3 are needed yields 7 excess). 0 for bought inputs or
-   * when there is no over-production.
-   */
-  excessQuantity?: number;
-};
+export type MaterialLine = { typeId: number; name: string; requiredQuantity: number; 
+/**
+ * Units covered from owned stock (#41); `line_cost` only pays the shortfall.
+ */
+have: number; 
+/**
+ * Unit cost used (the cheaper of build vs buy when buildable).
+ */
+unitPrice: number | null; lineCost: number; 
+/**
+ * True when building this input is cheaper than buying it.
+ */
+built: boolean; 
+/**
+ * Excess units produced by a build sub-step when
+ * `sub.product_per_run × runs_needed` exceeds the required quantity
+ * (partial-run over-production — e.g. a 10-run BPC producing 1 unit
+ * when only 3 are needed yields 7 excess). 0 for bought inputs or
+ * when there is no over-production.
+ */
+excessQuantity?: number }
 /**
  * Which price vector to value a role (materials or product) with. Defaults use
  * `SellMin`; the rest are user-selectable in the UI.
  */
-export type PriceBasis =
-  | "sellMin"
-  | "buyMax"
-  | "sellPercentile"
-  | "buyPercentile"
-  | "adjustedPrice"
-  | "averagePrice";
+export type PriceBasis = "sellMin" | "buyMax" | "sellPercentile" | "buyPercentile" | "adjustedPrice" | "averagePrice"
 /**
  * The result of evaluating a build step.
  */
-export type ProfitBreakdown = {
-  blueprintTypeId: number;
-  productTypeId: number;
-  productName: string;
-  runs: number;
-  me: number;
-  /**
-   * Total manufacturing time for the job (all runs), in seconds. Filled by the
-   * command layer (needs SDE base time + TE/skill/structure); 0 otherwise.
-   */
-  jobTimeSeconds: number;
-  unitsProduced: number;
-  materialCost: number;
-  jobFee: number;
-  /**
-   * Manufacturing system cost index used for this row's facility jobs.
-   */
-  manufacturingCostIndex: number;
-  /**
-   * Total install cost (job fee) for manufacturing, in ISK.
-   */
-  manufacturingInstallCost: number;
-  /**
-   * Total manufacturing job time for this row, in seconds (all runs).
-   */
-  manufacturingTimeSeconds: number;
-  /**
-   * Reaction install cost (job fee) for the top-level step, in ISK.
-   */
-  reactionInstallCost: number;
-  /**
-   * Total reaction job time for this row, in seconds (all runs).
-   */
-  reactionTimeSeconds: number;
-  /**
-   * Whether the result is approximate (facility cost index or tax is None —
-   * e.g. wormhole space with a manual override).
-   */
-  approximate: boolean;
-  /**
-   * Amortized blueprint acquisition cost for this job (per-run cost × runs).
-   */
-  blueprintCost: number;
-  /**
-   * Amortized invention cost for this job (T2 items; 0 otherwise).
-   */
-  inventionCost: number;
-  /**
-   * Invention cost detail (T2 items only).
-   */
-  invention: InventionBreakdown | null;
-  revenue: number;
-  profit: number;
-  /**
-   * Profit / revenue, or `None` when revenue is zero. Capped at 100%.
-   */
-  margin: number | null;
-  /**
-   * Return on investment: profit / cost. Can exceed 100% (e.g. build for
-   * 100, sell for 600 -> 500%). `None` when cost is zero.
-   */
-  roi: number | null;
-  profitPerUnit: number;
-  /**
-   * Revenue from selling excess (over-produced) buildable components —
-   * `excess_quantity × product-basis price`, with sales tax/broker fee
-   * applied when `include_sales_cost`. Added to net profit. 0 when
-   * nothing is built or nothing is over-produced.
-   */
-  excessRevenue: number;
-  /**
-   * Meta group of the product (Tech I/II, Faction, Officer, …). Filled by the
-   * command layer from the SDE; the pure engine leaves it `None`.
-   */
-  metaGroup: string | null;
-  /**
-   * Category of the product (Ship, Module, Charge, …). Filled by the command
-   * layer from the SDE; the pure engine leaves it `None`.
-   */
-  category: string | null;
-  /**
-   * Group of the product (Frigate, Cruiser, …). Filled by the command layer.
-   */
-  group: string | null;
-  /**
-   * Which market this result was priced at. Filled by the command layer; the
-   * pure engine leaves it `None`.
-   */
-  market: string | null;
-  /**
-   * Best hub to sell the product at (when "sell at best hub" is on). Filled by
-   * the command layer; `None` otherwise.
-   */
-  sellHub: string | null;
-  /**
-   * Whether the user has favorited this item. Filled by the command layer.
-   */
-  favorite: boolean;
-  /**
-   * Product daily volume (liquidity), for downstream filtering.
-   */
-  productVolume: number | null;
-  /**
-   * Per-unit sell price of the product at the chosen basis (the target price).
-   */
-  productPrice: number | null;
-  materials: MaterialLine[];
-  /**
-   * Type ids we could not price; the row's numbers are incomplete when set.
-   */
-  missingPrices: number[];
-  /**
-   * Reaction starts needed to build this product's T3/reacted components
-   * (empty when no reactions are in the tree). Always present — an empty
-   * plan when the build tree has no reactions.
-   */
-  reactions: ReactionPlan;
-};
+export type ProfitBreakdown = { blueprintTypeId: number; productTypeId: number; productName: string; runs: number; me: number; 
+/**
+ * Total manufacturing time for the job (all runs), in seconds. Filled by the
+ * command layer (needs SDE base time + TE/skill/structure); 0 otherwise.
+ */
+jobTimeSeconds: number; unitsProduced: number; materialCost: number; jobFee: number; 
+/**
+ * Manufacturing system cost index used for this row's facility jobs.
+ */
+manufacturingCostIndex: number; 
+/**
+ * Total install cost (job fee) for manufacturing, in ISK.
+ */
+manufacturingInstallCost: number; 
+/**
+ * Total manufacturing job time for this row, in seconds (all runs).
+ */
+manufacturingTimeSeconds: number; 
+/**
+ * Reaction install cost (job fee) for the top-level step, in ISK.
+ */
+reactionInstallCost: number; 
+/**
+ * Total reaction job time for this row, in seconds (all runs).
+ */
+reactionTimeSeconds: number; 
+/**
+ * Whether the result is approximate (facility cost index or tax is None —
+ * e.g. wormhole space with a manual override).
+ */
+approximate: boolean; 
+/**
+ * Amortized blueprint acquisition cost for this job (per-run cost × runs).
+ */
+blueprintCost: number; 
+/**
+ * Amortized invention cost for this job (T2 items; 0 otherwise).
+ */
+inventionCost: number; 
+/**
+ * Invention cost detail (T2 items only).
+ */
+invention: InventionBreakdown | null; revenue: number; profit: number; 
+/**
+ * Profit / revenue, or `None` when revenue is zero. Capped at 100%.
+ */
+margin: number | null; 
+/**
+ * Return on investment: profit / cost. Can exceed 100% (e.g. build for
+ * 100, sell for 600 -> 500%). `None` when cost is zero.
+ */
+roi: number | null; profitPerUnit: number; 
+/**
+ * Revenue from selling excess (over-produced) buildable components —
+ * `excess_quantity × product-basis price`, with sales tax/broker fee
+ * applied when `include_sales_cost`. Added to net profit. 0 when
+ * nothing is built or nothing is over-produced.
+ */
+excessRevenue: number; 
+/**
+ * Meta group of the product (Tech I/II, Faction, Officer, …). Filled by the
+ * command layer from the SDE; the pure engine leaves it `None`.
+ */
+metaGroup: string | null; 
+/**
+ * Category of the product (Ship, Module, Charge, …). Filled by the command
+ * layer from the SDE; the pure engine leaves it `None`.
+ */
+category: string | null; 
+/**
+ * Group of the product (Frigate, Cruiser, …). Filled by the command layer.
+ */
+group: string | null; 
+/**
+ * Which market this result was priced at. Filled by the command layer; the
+ * pure engine leaves it `None`.
+ */
+market: string | null; 
+/**
+ * Best hub to sell the product at (when "sell at best hub" is on). Filled by
+ * the command layer; `None` otherwise.
+ */
+sellHub: string | null; 
+/**
+ * Whether the user has favorited this item. Filled by the command layer.
+ */
+favorite: boolean; 
+/**
+ * Product daily volume (liquidity), for downstream filtering.
+ */
+productVolume: number | null; 
+/**
+ * Per-unit sell price of the product at the chosen basis (the target price).
+ */
+productPrice: number | null; materials: MaterialLine[]; 
+/**
+ * Type ids we could not price; the row's numbers are incomplete when set.
+ */
+missingPrices: number[]; 
+/**
+ * Reaction starts needed to build this product's T3/reacted components
+ * (empty when no reactions are in the tree). Always present — an empty
+ * plan when the build tree has no reactions.
+ */
+reactions: ReactionPlan }
 /**
  * Parameters for the production ranking. Everything here affects pricing/cost,
  * so changing one re-runs the calculation; the UI filters the results.
  */
-export type ProfitParams = {
-  /**
-   * Region to price against (default The Forge).
-   */
-  regionId?: number;
-  /**
-   * Station within the region; `None` prices against the region average.
-   */
-  stationId?: number | null;
-  runs?: number;
-  me?: number;
-  /**
-   * Per-blueprint researched ME, keyed by blueprint type id, from the owned
-   * blueprint library. When a blueprint is owned, its real ME overrides the
-   * global `me` above (T2/T3 rows still use the invented BPC's ME). Empty by
-   * default; the UI populates it from the logged-in characters' blueprints.
-   */
-  ownedMe?: Partial<{ [key in number]: number }>;
-  systemCostIndex?: number;
-  facilityTax?: number;
-  materialBasis?: PriceBasis | null;
-  productBasis?: PriceBasis | null;
-  /**
-   * Amortized blueprint acquisition cost per run (e.g. a faction BPC).
-   */
-  blueprintCostPerRun?: number;
-  /**
-   * Inventor science/encryption skill level (0..5) scaling invention
-   * probability. Default 5 (all V).
-   */
-  inventionSkillLevel?: number | null;
-  /**
-   * Decryptor type to apply to every T2 invention; `None` = no decryptor.
-   */
-  decryptorTypeId?: number | null;
-  /**
-   * Price the product at whichever hub pays the most (vs the chosen market).
-   * Materials are still priced at the chosen market.
-   */
-  productBestHub?: boolean;
-  /**
-   * Time efficiency (default for un-owned blueprints), 0..20.
-   */
-  te?: number;
-  /**
-   * Per-blueprint researched TE (blueprintTypeId → TE) from the owned library.
-   */
-  ownedTe?: Partial<{ [key in number]: number }>;
-  /**
-   * Industry time-skill level (0..5): Industry −4%/lvl × Advanced Industry −3%/lvl.
-   */
-  timeSkill?: number;
-  /**
-   * Structure time-efficiency bonus, percent (e.g. Raitaru 15, Sotiyo 30).
-   */
-  structureTePct?: number;
-  /**
-   * Combined structure+rig material multiplier (1.0 = none, 0.99 = −1%).
-   */
-  meBonus?: number;
-  /**
-   * Combined structure+rig cost saving on the cost-index portion (0..1).
-   */
-  costBonus?: number;
-  /**
-   * SCC surcharge fraction of EIV (CCP's 4% manufacturing default).
-   */
-  sccSurcharge?: number;
-  /**
-   * Owned stock per type id (from `roster_stock`); netted against the
-   * top-level bill of materials so you only buy the shortfall. Empty = none.
-   */
-  stock?: Partial<{ [key in number]: number }>;
-  /**
-   * Build sub-components (recursive build-vs-buy). When false, every material
-   * is simply bought at market — no intermediate manufacturing. Default true.
-   */
-  buildComponents?: boolean;
-  /**
-   * Subtract sale costs (broker fee + sales tax) from product revenue.
-   */
-  includeSalesCost?: boolean;
-  /**
-   * Sales tax fraction applied to revenue (when `include_sales_cost`).
-   */
-  salesTax?: number;
-  /**
-   * Broker fee fraction applied to revenue (when `include_sales_cost`).
-   */
-  brokerFee?: number;
-  /**
-   * Facility profiles for manufacturing and reaction steps. When `Some`,
-   * each build step selects its profile by activity (via
-   * [`FacilityProfiles::for_activity`]); when `None`, the flat
-   * `me_bonus`/`cost_bonus`/`system_cost_index`/`facility_tax` fields are
-   * used as-is (backward compatibility with the old single-structure API).
-   */
-  facilityProfiles?: FacilityProfiles | null;
-  /**
-   * Whether to ignore side products (reaction by-products) in the build vs.
-   * buy decision. When `true` (default), side products are not valued as
-   * additional revenue — only the main product's profit is computed.
-   */
-  ignoreSideProducts?: boolean;
-  /**
-   * Optional character implant/facility module bonuses (time, ME, cost).
-   * When `Some`, applied on top of the facility profile's bonuses.
-   */
-  implant: ImplantBonus | null;
-  /**
-   * Fallback ME (0..=10) applied to **component** build steps
-   * (`BuildStep.is_component == true`) when the component's blueprint is not
-   * in `owned_me` — lets the user set ONE ME for all components. Ignored for
-   * the top-level product (which uses `me`). 0 = no bonus.
-   */
-  componentMe?: number;
-  /**
-   * Fallback TE (0..=20) for component build steps when not owned — one value
-   * for all components. Ignored for the top-level product. 0 = no bonus.
-   */
-  componentTe?: number;
-  /**
-   * Inventory group IDs whose materials are always bought (never built),
-   * even when `build_components` is on — matches EVE-IPH's
-   * `AlwaysBuyFuelBlocks`/`AlwaysBuyRAMs`: 1136 = Fuel Blocks, 332 = R.A.M.-ы.
-   * Empty = build normally (no forced buy).
-   */
-  ignoreBuildGroups?: number[];
-};
+export type ProfitParams = { 
+/**
+ * Region to price against (default The Forge).
+ */
+regionId?: number; 
+/**
+ * Station within the region; `None` prices against the region average.
+ */
+stationId?: number | null; runs?: number; me?: number; 
+/**
+ * Per-blueprint researched ME, keyed by blueprint type id, from the owned
+ * blueprint library. When a blueprint is owned, its real ME overrides the
+ * global `me` above (T2/T3 rows still use the invented BPC's ME). Empty by
+ * default; the UI populates it from the logged-in characters' blueprints.
+ */
+ownedMe?: Partial<{ [key in number]: number }>; systemCostIndex?: number; facilityTax?: number; materialBasis?: PriceBasis | null; productBasis?: PriceBasis | null; 
+/**
+ * Amortized blueprint acquisition cost per run (e.g. a faction BPC).
+ */
+blueprintCostPerRun?: number; 
+/**
+ * Inventor science/encryption skill level (0..5) scaling invention
+ * probability. Default 5 (all V).
+ */
+inventionSkillLevel?: number | null; 
+/**
+ * Decryptor type to apply to every T2 invention; `None` = no decryptor.
+ */
+decryptorTypeId?: number | null; 
+/**
+ * Price the product at whichever hub pays the most (vs the chosen market).
+ * Materials are still priced at the chosen market.
+ */
+productBestHub?: boolean; 
+/**
+ * Time efficiency (default for un-owned blueprints), 0..20.
+ */
+te?: number; 
+/**
+ * Per-blueprint researched TE (blueprintTypeId → TE) from the owned library.
+ */
+ownedTe?: Partial<{ [key in number]: number }>; 
+/**
+ * Industry time-skill level (0..5): Industry −4%/lvl × Advanced Industry −3%/lvl.
+ */
+timeSkill?: number; 
+/**
+ * Structure time-efficiency bonus, percent (e.g. Raitaru 15, Sotiyo 30).
+ */
+structureTePct?: number; 
+/**
+ * Combined structure+rig material multiplier (1.0 = none, 0.99 = −1%).
+ */
+meBonus?: number; 
+/**
+ * Combined structure+rig cost saving on the cost-index portion (0..1).
+ */
+costBonus?: number; 
+/**
+ * SCC surcharge fraction of EIV (CCP's 4% manufacturing default).
+ */
+sccSurcharge?: number; 
+/**
+ * Owned stock per type id (from `roster_stock`); netted against the
+ * top-level bill of materials so you only buy the shortfall. Empty = none.
+ */
+stock?: Partial<{ [key in number]: number }>; 
+/**
+ * Build sub-components (recursive build-vs-buy). When false, every material
+ * is simply bought at market — no intermediate manufacturing. Default true.
+ */
+buildComponents?: boolean; 
+/**
+ * Subtract sale costs (broker fee + sales tax) from product revenue.
+ */
+includeSalesCost?: boolean; 
+/**
+ * Sales tax fraction applied to revenue (when `include_sales_cost`).
+ */
+salesTax?: number; 
+/**
+ * Broker fee fraction applied to revenue (when `include_sales_cost`).
+ */
+brokerFee?: number; 
+/**
+ * Facility profiles for manufacturing and reaction steps. When `Some`,
+ * each build step selects its profile by activity (via
+ * [`FacilityProfiles::for_activity`]); when `None`, the flat
+ * `me_bonus`/`cost_bonus`/`system_cost_index`/`facility_tax` fields are
+ * used as-is (backward compatibility with the old single-structure API).
+ */
+facilityProfiles?: FacilityProfiles | null; 
+/**
+ * Whether to ignore side products (reaction by-products) in the build vs.
+ * buy decision. When `true` (default), side products are not valued as
+ * additional revenue — only the main product's profit is computed.
+ */
+ignoreSideProducts?: boolean; 
+/**
+ * Optional character implant/facility module bonuses (time, ME, cost).
+ * When `Some`, applied on top of the facility profile's bonuses.
+ */
+implant: ImplantBonus | null; 
+/**
+ * Fallback ME (0..=10) applied to **component** build steps
+ * (`BuildStep.is_component == true`) when the component's blueprint is not
+ * in `owned_me` — lets the user set ONE ME for all components. Ignored for
+ * the top-level product (which uses `me`). 0 = no bonus.
+ */
+componentMe?: number; 
+/**
+ * Fallback TE (0..=20) for component build steps when not owned — one value
+ * for all components. Ignored for the top-level product. 0 = no bonus.
+ */
+componentTe?: number; 
+/**
+ * Inventory group IDs whose materials are always bought (never built),
+ * even when `build_components` is on — matches EVE-IPH's
+ * `AlwaysBuyFuelBlocks`/`AlwaysBuyRAMs`: 1136 = Fuel Blocks, 332 = R.A.M.-ы.
+ * Empty = build normally (no forced buy).
+ */
+ignoreBuildGroups?: number[] }
 /**
  * One reagent within a [`ReactionLine`]: quantity needed across all reaction
  * runs + its cost. Reaction materials have **no ME** in EVE (ME only applies
  * to manufacturing), so `required = base_quantity × runs`.
  */
-export type ReactionInputLine = {
-  typeId: number;
-  name: string;
-  requiredQuantity: number;
-  /**
-   * Unit price used (material basis), for the UI's per-line cost.
-   */
-  unitPrice: number | null;
-  lineCost: number;
-};
+export type ReactionInputLine = { typeId: number; name: string; requiredQuantity: number; 
+/**
+ * Unit price used (material basis), for the UI's per-line cost.
+ */
+unitPrice: number | null; lineCost: number }
 /**
  * A single reaction start in the plan: which formula, how many runs, and its
  * full reagent requirement.
  */
-export type ReactionLine = {
-  blueprintTypeId: number;
-  productTypeId: number;
-  productName: string;
-  productPerRun: number;
-  runs: number;
-  inputs: ReactionInputLine[];
-};
+export type ReactionLine = { blueprintTypeId: number; productTypeId: number; productName: string; productPerRun: number; runs: number; inputs: ReactionInputLine[] }
 /**
  * Full reaction plan extracted from a build tree — every Reaction sub-step
  * (composite / molecular / polymer / biochemical formulas), how many times it
  * must run, and its reagents. `total_install_cost` is the summed job fee
  * already captured in [`ProfitBreakdown::reaction_install_cost`].
  */
-export type ReactionPlan = { lines: ReactionLine[]; totalInstallCost: number };
+export type ReactionPlan = { lines: ReactionLine[]; totalInstallCost: number }
 /**
  * A known manufacturing rig type with its bonus description.
  * A rig type surfaced to the Facilities rig selector.
  */
-export type RigTypeInfo = {
-  typeId: number;
-  name: string;
-  /**
-   * `me` / `te` / `cost` — primary bonus column (groups the multiselect).
-   */
-  category: string;
-  tier: string;
-  /**
-   * Primary base bonus (display, %, 100% scale).
-   */
-  bonus: number;
-  /**
-   * Rig slot size: 1=Small, 2=Medium, 3=Large, 4=XL. A rig only fits a slot
-   * of its own size, so the UI only offers rigs with `rig_size ==
-   * structure.max_rig_size`.
-   */
-  rigSize: number;
-  /**
-   * Base (100%) reductions, in %: material / time / cost.
-   */
-  meBonus: number;
-  teBonus: number;
-  costBonus: number;
-  isT2: boolean;
-};
+export type RigTypeInfo = { typeId: number; name: string; 
+/**
+ * `me` / `te` / `cost` — primary bonus column (groups the multiselect).
+ */
+category: string; tier: string; 
+/**
+ * Primary base bonus (display, %, 100% scale).
+ */
+bonus: number; 
+/**
+ * Rig slot size: 1=Small, 2=Medium, 3=Large, 4=XL. A rig only fits a slot
+ * of its own size, so the UI only offers rigs with `rig_size ==
+ * structure.max_rig_size`.
+ */
+rigSize: number; 
+/**
+ * Base (100%) reductions, in %: material / time / cost.
+ */
+meBonus: number; teBonus: number; costBonus: number; isT2: boolean }
 /**
  * Security tier of the system the facility sits in. Wormhole systems have
  * no live cost index, so results there are marked approximate.
  */
-export type SecurityTier = "highsec" | "lowsec" | "nullsec" | "wormhole";
+export type SecurityTier = "highsec" | "lowsec" | "nullsec" | "wormhole"
 /**
  * Upwell structure (or NPC station) type that hosts a manufacturing or
  * reaction job. Drives the base ME/TE/cost-index multipliers.
  */
-export type StructureType =
-  "npcStation" | "raitaru" | "azbel" | "sotiyo" | "athanor" | "tatara";
+export type StructureType = "npcStation" | "raitaru" | "azbel" | "sotiyo" | "athanor" | "tatara"
 
 /** tauri-specta globals **/
 
 import {
-  invoke as TAURI_INVOKE,
-  Channel as TAURI_CHANNEL,
+	invoke as TAURI_INVOKE,
+	Channel as TAURI_CHANNEL,
 } from "@tauri-apps/api/core";
 import * as TAURI_API_EVENT from "@tauri-apps/api/event";
 import { type WebviewWindow as __WebviewWindow__ } from "@tauri-apps/api/webviewWindow";
 
 type __EventObj__<T> = {
-  listen: (
-    cb: TAURI_API_EVENT.EventCallback<T>,
-  ) => ReturnType<typeof TAURI_API_EVENT.listen<T>>;
-  once: (
-    cb: TAURI_API_EVENT.EventCallback<T>,
-  ) => ReturnType<typeof TAURI_API_EVENT.once<T>>;
-  emit: null extends T
-    ? (payload?: T) => ReturnType<typeof TAURI_API_EVENT.emit>
-    : (payload: T) => ReturnType<typeof TAURI_API_EVENT.emit>;
+	listen: (
+		cb: TAURI_API_EVENT.EventCallback<T>,
+	) => ReturnType<typeof TAURI_API_EVENT.listen<T>>;
+	once: (
+		cb: TAURI_API_EVENT.EventCallback<T>,
+	) => ReturnType<typeof TAURI_API_EVENT.once<T>>;
+	emit: null extends T
+		? (payload?: T) => ReturnType<typeof TAURI_API_EVENT.emit>
+		: (payload: T) => ReturnType<typeof TAURI_API_EVENT.emit>;
 };
 
 export type Result<T, E> =
-  { status: "ok"; data: T } | { status: "error"; error: E };
+	| { status: "ok"; data: T }
+	| { status: "error"; error: E };
 
 function __makeEvents__<T extends Record<string, any>>(
-  mappings: Record<keyof T, string>,
+	mappings: Record<keyof T, string>,
 ) {
-  return new Proxy(
-    {} as unknown as {
-      [K in keyof T]: __EventObj__<T[K]> & {
-        (handle: __WebviewWindow__): __EventObj__<T[K]>;
-      };
-    },
-    {
-      get: (_, event) => {
-        const name = mappings[event as keyof T];
+	return new Proxy(
+		{} as unknown as {
+			[K in keyof T]: __EventObj__<T[K]> & {
+				(handle: __WebviewWindow__): __EventObj__<T[K]>;
+			};
+		},
+		{
+			get: (_, event) => {
+				const name = mappings[event as keyof T];
 
-        return new Proxy((() => {}) as any, {
-          apply: (_, __, [window]: [__WebviewWindow__]) => ({
-            listen: (arg: any) => window.listen(name, arg),
-            once: (arg: any) => window.once(name, arg),
-            emit: (arg: any) => window.emit(name, arg),
-          }),
-          get: (_, command: keyof __EventObj__<any>) => {
-            switch (command) {
-              case "listen":
-                return (arg: any) => TAURI_API_EVENT.listen(name, arg);
-              case "once":
-                return (arg: any) => TAURI_API_EVENT.once(name, arg);
-              case "emit":
-                return (arg: any) => TAURI_API_EVENT.emit(name, arg);
-            }
-          },
-        });
-      },
-    },
-  );
+				return new Proxy((() => {}) as any, {
+					apply: (_, __, [window]: [__WebviewWindow__]) => ({
+						listen: (arg: any) => window.listen(name, arg),
+						once: (arg: any) => window.once(name, arg),
+						emit: (arg: any) => window.emit(name, arg),
+					}),
+					get: (_, command: keyof __EventObj__<any>) => {
+						switch (command) {
+							case "listen":
+								return (arg: any) => TAURI_API_EVENT.listen(name, arg);
+							case "once":
+								return (arg: any) => TAURI_API_EVENT.once(name, arg);
+							case "emit":
+								return (arg: any) => TAURI_API_EVENT.emit(name, arg);
+						}
+					},
+				});
+			},
+		},
+	);
 }

@@ -61,6 +61,7 @@ describe("ProfitTable", () => {
         regionId={10000002}
         onFavorite={vi.fn()}
         onBlacklist={vi.fn()}
+        onPlanBuild={vi.fn()}
       />,
     );
 
@@ -82,6 +83,7 @@ describe("ProfitTable", () => {
         regionId={10000002}
         onFavorite={vi.fn()}
         onBlacklist={vi.fn()}
+        onPlanBuild={vi.fn()}
       />,
     );
 
@@ -99,6 +101,7 @@ describe("ProfitTable", () => {
         regionId={10000002}
         onFavorite={vi.fn()}
         onBlacklist={vi.fn()}
+        onPlanBuild={vi.fn()}
       />,
     );
 
@@ -112,6 +115,7 @@ describe("ProfitTable", () => {
         regionId={10000002}
         onFavorite={vi.fn()}
         onBlacklist={vi.fn()}
+        onPlanBuild={vi.fn()}
       />,
     );
 

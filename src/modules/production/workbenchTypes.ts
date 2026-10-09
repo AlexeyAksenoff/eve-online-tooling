@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { UseMutationResult, UseQueryResult } from "@tanstack/react-query";
 import type {
+  BlueprintSearchResult,
   Decryptor,
   ImplantBonus,
   ListItem,
@@ -52,6 +53,8 @@ export interface WorkbenchState {
   setBuildComponents: (b: boolean) => void;
   ignoreBuildFuelBlocks: boolean;
   setIgnoreBuildFuelBlocks: (b: boolean) => void;
+  ignoreBuildRams: boolean;
+  setIgnoreBuildRams: (b: boolean) => void;
   te: number;
   setTe: (n: number) => void;
   /** Fallback ME (0..10) for component build steps (is_component) when not owned. */
@@ -102,6 +105,8 @@ export interface WorkbenchState {
   setMetas: (s: Set<string>) => void;
   ownedOnly: boolean;
   setOwnedOnly: (b: boolean) => void;
+  stockCompleteOnly: boolean;
+  setStockCompleteOnly: (b: boolean) => void;
   excludeSpecialMods: boolean;
   setExcludeSpecialMods: (b: boolean) => void;
   favoritesOnly: boolean;
@@ -148,6 +153,7 @@ export interface WorkbenchState {
   toggleFavorite: (r: ProfitBreakdown) => void;
   blacklistRow: (r: ProfitBreakdown) => void;
   calculate: () => void;
+  calculateBuild: () => void;
   resetAllFilters: () => void;
   setList: UseMutationResult<
     void,
@@ -157,4 +163,19 @@ export interface WorkbenchState {
   >;
   autoRecalc: boolean;
   setAutoRecalc: (fn: (a: boolean) => boolean) => void;
+
+  // Build Planner: single-blueprint mode. When `view === "build_planner"`,
+  // the user has selected a specific blueprint to plan. The wizard configures
+  // per-BP ME/TE/runs that override the catalog defaults for that one BP.
+  buildBlueprintTypeId: number | null;
+  setBuildBlueprintTypeId: (id: number | null) => void;
+  buildBpMe: number;
+  setBuildBpMe: (n: number) => void;
+  buildBpTe: number;
+  setBuildBpTe: (n: number) => void;
+  buildRuns: number;
+  setBuildRuns: (n: number) => void;
+  buildSearchResult: BlueprintSearchResult | null;
+  setBuildSearchResult: (r: BlueprintSearchResult | null) => void;
+  buildProfit: UseMutationResult<ProfitBreakdown, Error, ProfitParams, unknown>;
 }

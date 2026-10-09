@@ -4,6 +4,7 @@ import {
   ownedBlueprints,
   productionDecryptors,
   productionProfit,
+  productionProfitForBlueprint,
   rosterStock,
   sdeUpdate,
   type ImplantBonus,
@@ -23,13 +24,15 @@ import { toggle, uniqueSorted } from "../../lib/sets";
 import { parseItems } from "../../lib/parseItems";
 import {
   FORGE,
-  IGNORE_BUILD_GROUPS_DEFAULT,
+  FUEL_BLOCK_GROUP_ID,
   IMPORTED_BP_KEY,
+  RAM_GROUP_ID,
   loadImported,
   type ImportedBlueprint,
   type ResultsView,
   type Tab,
 } from "./types";
+import type { BlueprintSearchResult } from "../../lib/api";
 import {
   loadFacilityProfiles,
   saveFacilityProfiles,
@@ -50,6 +53,7 @@ export function useWorkbench(): WorkbenchState {
   const [useStock, setUseStock] = useState(false);
   const [buildComponents, setBuildComponents] = useState(false);
   const [ignoreBuildFuelBlocks, setIgnoreBuildFuelBlocks] = useState(false);
+  const [ignoreBuildRams, setIgnoreBuildRams] = useState(false);
   const [te, setTe] = useState(0);
   // Fallback ME/TE applied to ALL component build steps (is_component) when the
   // component's blueprint is not owned — one pair for all components.
@@ -84,6 +88,16 @@ export function useWorkbench(): WorkbenchState {
   // Implant/module bonuses (e.g. Eifyr 'Guns'): additional time/ME/cost reduction.
   const [implant, setImplant] = useState<ImplantBonus | null>(null);
 
+  // Build Planner state: a specific blueprint selected for single-BP planning.
+  const [buildBlueprintTypeId, setBuildBlueprintTypeId] = useState<
+    number | null
+  >(null);
+  const [buildBpMe, setBuildBpMe] = useState(0);
+  const [buildBpTe, setBuildBpTe] = useState(0);
+  const [buildRuns, setBuildRuns] = useState(1);
+  const [buildSearchResult, setBuildSearchResult] =
+    useState<BlueprintSearchResult | null>(null);
+
   // Client-side filters — applied instantly to the results.
   const [name, setName] = useState("");
   const [categories, setCategories] = useState<Set<string>>(new Set());
@@ -91,6 +105,8 @@ export function useWorkbench(): WorkbenchState {
   const [ownedOnly, setOwnedOnly] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [excludeSpecialMods, setExcludeSpecialMods] = useState(false);
+  const [stockCompleteOnly, setStockCompleteOnly] = useState(false);
+
   const [minRoiPct, setMinRoiPct] = useState("");
   const [minVolume, setMinVolume] = useState("");
   const [pasteList, setPasteList] = useState("");
@@ -141,6 +157,14 @@ export function useWorkbench(): WorkbenchState {
   const profit = useMutation({
     mutationFn: (p: ProfitParams) => productionProfit(p),
     onSuccess: setRows,
+  });
+
+  // Build Planner: score a single blueprint instead of the whole catalogue.
+  const buildProfit = useMutation({
+    mutationFn: (params: ProfitParams) =>
+      buildBlueprintTypeId != null
+        ? productionProfitForBlueprint(buildBlueprintTypeId, params)
+        : Promise.reject(new Error("No blueprint selected")),
   });
 
   const { favorites, blacklist, setList, toggleFavorite, blacklistRow } =
@@ -197,9 +221,53 @@ export function useWorkbench(): WorkbenchState {
         useStock,
         stock: stock.data,
         buildComponents,
-        ignoreBuildGroups: ignoreBuildFuelBlocks
-          ? [...IGNORE_BUILD_GROUPS_DEFAULT]
-          : [],
+        ignoreBuildGroups: [
+          ...(ignoreBuildFuelBlocks ? [FUEL_BLOCK_GROUP_ID] : []),
+          ...(ignoreBuildRams ? [RAM_GROUP_ID] : []),
+        ],
+        includeSaleCost,
+        sellTaxPct,
+        sellBrokerPct,
+        materialBasis,
+        productBasis,
+        blueprintCostPerRun,
+        inventionSkill,
+        decryptorTypeId,
+        productBestHub,
+        facilityProfiles,
+        ignoreSideProducts: true,
+        implant,
+        componentMe,
+        componentTe,
+      }),
+    );
+  }
+
+  // Build Planner: price a single blueprint with per-BP ME/TE/runs overrides.
+  function calculateBuild() {
+    if (buildBlueprintTypeId == null) return;
+    // Merge the wizard's per-BP ME/TE into owned_me/owned_te so they
+    // override the global fallback for this specific blueprint.
+    const buildOwnedMe = { ...ownedMe, [buildBlueprintTypeId]: buildBpMe };
+    const buildOwnedTe = { ...ownedTe, [buildBlueprintTypeId]: buildBpTe };
+    buildProfit.mutate(
+      composeProfitParams({
+        regionId,
+        stationId,
+        runs: buildRuns,
+        me,
+        useOwnedMe: true, // honor the per-BP ME we just set above
+        ownedMe: buildOwnedMe,
+        te,
+        ownedTe: buildOwnedTe,
+        timeSkill,
+        useStock,
+        stock: stock.data,
+        buildComponents,
+        ignoreBuildGroups: [
+          ...(ignoreBuildFuelBlocks ? [FUEL_BLOCK_GROUP_ID] : []),
+          ...(ignoreBuildRams ? [RAM_GROUP_ID] : []),
+        ],
         includeSaleCost,
         sellTaxPct,
         sellBrokerPct,
@@ -287,6 +355,7 @@ export function useWorkbench(): WorkbenchState {
       if (metas.size > 0 && !(r.metaGroup && metas.has(r.metaGroup)))
         return false;
       if (ownedOnly && !ownedSet.has(r.blueprintTypeId)) return false;
+      if (stockCompleteOnly && !stockCoversRow(r)) return false;
       if (excludeSpecialMods && isExcludedMetaGroup(r.metaGroup)) return false;
       if (favoritesOnly && !r.favorite) return false;
       if (minRoi !== null && (r.roi ?? -Infinity) < minRoi) return false;
@@ -299,6 +368,7 @@ export function useWorkbench(): WorkbenchState {
     categories,
     metas,
     ownedOnly,
+    stockCompleteOnly,
     excludeSpecialMods,
     favoritesOnly,
     ownedSet,
@@ -334,6 +404,12 @@ export function useWorkbench(): WorkbenchState {
       key: `meta:${m}`,
       label: m,
       clear: () => setMetas(toggle(metas, m)),
+    });
+  if (stockCompleteOnly)
+    activeFilters.push({
+      key: "stock",
+      label: "Stock-complete builds only",
+      clear: () => setStockCompleteOnly(false),
     });
   if (ownedOnly)
     activeFilters.push({
@@ -376,11 +452,18 @@ export function useWorkbench(): WorkbenchState {
     setCategories(new Set());
     setMetas(new Set());
     setOwnedOnly(false);
+    setStockCompleteOnly(false);
     setExcludeSpecialMods(false);
     setFavoritesOnly(false);
     setMinRoiPct("");
     setMinVolume("");
     setPasteList("");
+  }
+
+  // For the "stock-complete builds only" filter: true when every material is
+  // either built (cheaper than buying) or covered by owned stock.
+  function stockCoversRow(r: ProfitBreakdown): boolean {
+    return r.materials.every((m) => m.built || m.have >= m.requiredQuantity);
   }
 
   return {
@@ -404,6 +487,8 @@ export function useWorkbench(): WorkbenchState {
     setBuildComponents,
     ignoreBuildFuelBlocks,
     setIgnoreBuildFuelBlocks,
+    ignoreBuildRams,
+    setIgnoreBuildRams,
     te,
     setTe,
     componentMe,
@@ -444,6 +529,8 @@ export function useWorkbench(): WorkbenchState {
     setMetas,
     ownedOnly,
     setOwnedOnly,
+    stockCompleteOnly,
+    setStockCompleteOnly,
     excludeSpecialMods,
     setExcludeSpecialMods,
     favoritesOnly,
@@ -487,9 +574,21 @@ export function useWorkbench(): WorkbenchState {
     toggleFavorite,
     blacklistRow,
     calculate,
+    calculateBuild,
     resetAllFilters,
     setList,
     autoRecalc,
     setAutoRecalc,
+    buildBlueprintTypeId,
+    setBuildBlueprintTypeId,
+    buildBpMe,
+    setBuildBpMe,
+    buildBpTe,
+    setBuildBpTe,
+    buildRuns,
+    setBuildRuns,
+    buildSearchResult,
+    setBuildSearchResult,
+    buildProfit,
   };
 }
