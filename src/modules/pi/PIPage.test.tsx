@@ -79,6 +79,8 @@ function colony(overrides: Partial<ColonyView> = {}): ColonyView {
       },
     ],
     produced: [],
+    notes: "",
+    targetProducts: [],
     needsAttention: false,
     ...overrides,
   };
@@ -372,5 +374,136 @@ describe("PIPage Planner tab", () => {
     // The empty branch inside the tree also flags itself.
     expect(screen.getByText("Ukomi Superconductors")).toBeInTheDocument();
     expect(screen.getAllByText("needs imports").length).toBeGreaterThan(0);
+  });
+});
+
+describe("PIPage Colonies tab — notes & target products", () => {
+  beforeEach(() => invokeMock.mockReset());
+
+  it("renders a colony's saved notes and target-product chips", async () => {
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [
+        colony({
+          notes: "Building Robotics here for the T2 module run.",
+          targetProducts: [{ typeId: 9848, name: "Robotics" }],
+        }),
+      ],
+      pi_locked_get: () => [],
+    });
+    renderWithQuery(<PIPage />);
+
+    expect(
+      await screen.findByDisplayValue(
+        "Building Robotics here for the T2 module run.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Robotics")).toBeInTheDocument();
+  });
+
+  it("saves notes on blur and merges the result without refetching", async () => {
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [colony()],
+      pi_locked_get: () => [],
+      pi_colony_note_set: () => ({
+        characterId: 1,
+        planetId: 1,
+        notes: "stage 1: extractors, stage 2: factories",
+        targetProducts: [],
+      }),
+    });
+    renderWithQuery(<PIPage />);
+
+    const textarea = await screen.findByPlaceholderText(
+      /what are you building here/i,
+    );
+    fireEvent.change(textarea, {
+      target: { value: "stage 1: extractors, stage 2: factories" },
+    });
+    fireEvent.blur(textarea);
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("pi_colony_note_set", {
+        characterId: 1,
+        planetId: 1,
+        notes: "stage 1: extractors, stage 2: factories",
+        targetProductTypeIds: [],
+      }),
+    );
+    expect(
+      await screen.findByDisplayValue(
+        "stage 1: extractors, stage 2: factories",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("adds a target product via the picker", async () => {
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [colony()],
+      pi_locked_get: () => [],
+      sde_search_pi_commodities: () => [{ id: 9848, name: "Robotics" }],
+      pi_colony_note_set: () => ({
+        characterId: 1,
+        planetId: 1,
+        notes: "",
+        targetProducts: [{ typeId: 9848, name: "Robotics" }],
+      }),
+    });
+    renderWithQuery(<PIPage />);
+
+    await screen.findByText("Jita");
+    fireEvent.change(screen.getByPlaceholderText("Add target product…"), {
+      target: { value: "robo" },
+    });
+    fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("pi_colony_note_set", {
+        characterId: 1,
+        planetId: 1,
+        notes: "",
+        targetProductTypeIds: [9848],
+      }),
+    );
+    expect(await screen.findByText("Robotics")).toBeInTheDocument();
+  });
+
+  it("removes a target product chip", async () => {
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [
+        colony({ targetProducts: [{ typeId: 9848, name: "Robotics" }] }),
+      ],
+      pi_locked_get: () => [],
+      pi_colony_note_set: () => ({
+        characterId: 1,
+        planetId: 1,
+        notes: "",
+        targetProducts: [],
+      }),
+    });
+    renderWithQuery(<PIPage />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Remove Robotics from targets",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("pi_colony_note_set", {
+        characterId: 1,
+        planetId: 1,
+        notes: "",
+        targetProductTypeIds: [],
+      }),
+    );
+    expect(screen.queryByText("Robotics")).not.toBeInTheDocument();
   });
 });

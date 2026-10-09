@@ -3,4 +3,5 @@
 //! the required-vs-available balance, and the products you've locked in.
 
 pub mod commands;
+mod notes;
 mod planet_types;

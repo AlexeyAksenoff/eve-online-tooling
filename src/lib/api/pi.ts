@@ -37,6 +37,11 @@ export interface ProducedItem {
   name: string;
   locked: boolean;
 }
+export interface TargetProductView {
+  typeId: number;
+  name: string;
+}
+
 export interface ColonyView {
   characterId: number;
   characterName: string;
@@ -50,6 +55,11 @@ export interface ColonyView {
   storage: StorageView[];
   balance: BalanceRow[];
   produced: ProducedItem[];
+  /** User-authored notes for this colony — local, not from ESI. */
+  notes: string;
+  /** PI products the user intends to build here, possibly across several
+   * extraction/production cycles — local, not from ESI. */
+  targetProducts: TargetProductView[];
   needsAttention: boolean;
 }
 
@@ -77,6 +87,31 @@ export function piLockedGet(): Promise<number[]> {
 /** Replace the locked-in produced type ids. */
 export function piLockedSet(typeIds: number[]): Promise<void> {
   return invoke<void>("pi_locked_set", { typeIds });
+}
+
+export interface ColonyNoteView {
+  characterId: number;
+  planetId: number;
+  notes: string;
+  targetProducts: TargetProductView[];
+}
+
+/**
+ * Save a colony's notes and target-product list. Local, not ESI — deleted
+ * automatically once the colony itself no longer exists for that character.
+ */
+export function piColonyNoteSet(
+  characterId: number,
+  planetId: number,
+  notes: string,
+  targetProductTypeIds: number[],
+): Promise<ColonyNoteView> {
+  return invoke<ColonyNoteView>("pi_colony_note_set", {
+    characterId,
+    planetId,
+    notes,
+    targetProductTypeIds,
+  });
 }
 
 // --- Production-chain planner (#882) ---
