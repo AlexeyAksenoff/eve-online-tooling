@@ -82,6 +82,13 @@ describe("InfoPanel", () => {
     expect(screen.getByText("Widget @ 5.0 (best 4.9)")).toBeInTheDocument();
   });
 
+  it("shows the client version", async () => {
+    renderPanel([]);
+    expect(
+      await screen.findByText(`EVE Online Tooling v${__APP_VERSION__}`),
+    ).toBeInTheDocument();
+  });
+
   it("clears the whole feed via the top-level Clear all button", async () => {
     renderPanel();
     fireEvent.click(await screen.findByRole("button", { name: "Clear all" }));
