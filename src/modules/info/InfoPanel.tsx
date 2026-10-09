@@ -84,6 +84,9 @@ export function InfoPanel() {
           ) : undefined
         }
       />
+      <p className="mt-1 text-xs text-zinc-600">
+        EVE Online Tooling v{__APP_VERSION__}
+      </p>
       {rows.length === 0 ? (
         <Centered>
           Nothing yet. Scripts and plugins post here with{" "}
