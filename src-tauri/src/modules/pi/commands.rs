@@ -16,6 +16,8 @@ use crate::esi::{authed_get, AuthState};
 use crate::sde::{PlanetSchematic, Sde};
 use crate::storage;
 
+use super::notes::{self, ColonyNoteView, TargetProductView};
+
 /// Persisted list of "locked in" produced type ids.
 const LOCKED_LIST: &str = "pi_locked";
 
@@ -140,6 +142,13 @@ pub struct ColonyView {
     pub storage: Vec<StorageView>,
     pub balance: Vec<BalanceRow>,
     pub produced: Vec<ProducedItem>,
+    /// User-authored notes for this colony (#NNN) — local, not from ESI.
+    #[serde(default)]
+    pub notes: String,
+    /// PI products the user intends to build here, possibly across several
+    /// extraction/production cycles. Local, not from ESI.
+    #[serde(default)]
+    pub target_products: Vec<TargetProductView>,
     /// True if any extractor program has ended or any commodity is in deficit.
     pub needs_attention: bool,
 }
@@ -207,6 +216,11 @@ pub async fn pi_overview_core(
     let names = storage::character_names(dir);
 
     let mut views = Vec::new();
+    // (character_id, planet_ids) for every character whose planets *list*
+    // call succeeded this round — feeds notes::colony_liveness so a note row
+    // only gets pruned when we positively know its colony is gone, not when
+    // ESI merely hiccuped on that character this time (see notes.rs).
+    let mut fetched: Vec<(i64, Vec<i64>)> = Vec::new();
     for character_id in character_ids {
         let character_name = names
             .get(&character_id)
@@ -223,6 +237,7 @@ pub async fn pi_overview_core(
             Ok(colonies) => colonies,
             Err(_) => continue,
         };
+        fetched.push((character_id, colonies.iter().map(|c| c.planet_id).collect()));
 
         for c in &colonies {
             let planet: EsiPlanet = match authed_get(
@@ -250,6 +265,20 @@ pub async fn pi_overview_core(
             }
         }
     }
+
+    let (live, fetched_characters) = notes::colony_liveness(&fetched);
+    let stored_notes = notes::load_pruned(dir, &live, &fetched_characters);
+    let notes_by_colony: HashMap<(i64, i64), _> = stored_notes
+        .iter()
+        .map(|n| ((n.character_id, n.planet_id), n))
+        .collect();
+    for view in &mut views {
+        if let Some(note) = notes_by_colony.get(&(view.character_id, view.planet_id)) {
+            view.notes = note.notes.clone();
+            view.target_products = notes::target_views(&sde, note);
+        }
+    }
+
     Ok(views)
 }
 
@@ -453,6 +482,8 @@ fn build_colony(
         storage,
         balance,
         produced,
+        notes: String::new(),
+        target_products: Vec::new(),
         needs_attention,
     })
 }
@@ -486,6 +517,36 @@ pub fn pi_locked_get(app: AppHandle) -> Result<Vec<i64>, String> {
 pub fn pi_locked_set(app: AppHandle, type_ids: Vec<i64>) -> Result<(), String> {
     let dir = crate::storage::app_data_dir(&app)?;
     storage::save_id_list(&dir, LOCKED_LIST, &type_ids)
+}
+
+/// Save this colony's notes and target-product list (local, not ESI —
+/// deleted automatically once the colony itself is gone, see `notes.rs`).
+/// Returns the resolved view so the caller can merge it straight into its
+/// already-fetched `pi_overview` result instead of refetching from ESI.
+#[tauri::command]
+pub fn pi_colony_note_set(
+    app: AppHandle,
+    character_id: i64,
+    planet_id: i64,
+    notes: String,
+    target_product_type_ids: Vec<i64>,
+) -> Result<ColonyNoteView, crate::model::AppError> {
+    let dir = crate::storage::app_data_dir(&app)?;
+    let sde = crate::sde::open_from_app(&app)?;
+    let row = notes::set(
+        &dir,
+        character_id,
+        planet_id,
+        notes,
+        target_product_type_ids,
+    )?;
+    let target_products = notes::target_views(&sde, &row);
+    Ok(ColonyNoteView {
+        character_id: row.character_id,
+        planet_id: row.planet_id,
+        notes: row.notes,
+        target_products,
+    })
 }
 
 // --- Production-chain planner (#882) ---
@@ -695,6 +756,8 @@ mod tests {
             storage: Vec::new(),
             balance: Vec::new(),
             produced: Vec::new(),
+            notes: String::new(),
+            target_products: Vec::new(),
             needs_attention,
         }
     }

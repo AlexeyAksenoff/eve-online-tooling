@@ -388,6 +388,7 @@ pub fn run() {
             modules::pi::commands::pi_locked_get,
             modules::pi::commands::pi_locked_set,
             modules::pi::commands::pi_production_chain,
+            modules::pi::commands::pi_colony_note_set,
             modules::wormholes::commands::wh_connections,
             modules::wormholes::commands::wh_add_connection,
             modules::wormholes::commands::wh_update_connection,
