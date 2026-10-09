@@ -30,6 +30,38 @@ const TIERS: { value: AmmoTier | "all"; label: string }[] = [
   { value: "T2", label: "T2" },
 ];
 
+type RangeProfile = "all" | "long" | "neutral" | "short";
+const RANGE_PROFILES: { value: RangeProfile; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "long", label: "Long range" },
+  { value: "neutral", label: "Neutral" },
+  { value: "short", label: "Short range" },
+];
+
+type TrackingProfile = "all" | "plus" | "neutral" | "minus";
+const TRACKING_PROFILES: { value: TrackingProfile; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "plus", label: "Tracking +" },
+  { value: "neutral", label: "Neutral" },
+  { value: "minus", label: "Tracking −" },
+];
+
+/** Multipliers come from the SDE in clean steps (0.25, 0.5, 0.62, …), so a
+ * small epsilon is enough to tell "exactly 1.0" from a real +/- bonus. */
+const PROFILE_EPS = 0.01;
+
+function rangeProfileOf(r: AmmoChargeRow): "long" | "neutral" | "short" {
+  if (r.optimalMult > 1 + PROFILE_EPS) return "long";
+  if (r.optimalMult < 1 - PROFILE_EPS) return "short";
+  return "neutral";
+}
+
+function trackingProfileOf(r: AmmoChargeRow): "plus" | "neutral" | "minus" {
+  if (r.trackingMult > 1 + PROFILE_EPS) return "plus";
+  if (r.trackingMult < 1 - PROFILE_EPS) return "minus";
+  return "neutral";
+}
+
 /** Short, family-specific gotchas that don't fit any column. */
 const NOTES: Record<AmmoFamily, string[]> = {
   hybrid: [
@@ -157,9 +189,45 @@ export function AmmoPage() {
   );
 }
 
+function FilterGroup<T extends string>({
+  options,
+  value,
+  onChange,
+  compact = false,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  /** Smaller padding/text — used for the secondary (tier/range/tracking) filters. */
+  compact?: boolean;
+}) {
+  return (
+    <div
+      className={`flex overflow-hidden rounded border border-zinc-800 ${compact ? "text-xs" : "text-sm"}`}
+    >
+      {options.map(({ value: v, label }) => (
+        <button
+          key={v}
+          onClick={() => onChange(v)}
+          aria-pressed={value === v}
+          className={`${compact ? "px-2.5 py-1.5" : "px-3 py-1.5"} ${
+            value === v
+              ? "bg-zinc-700 text-zinc-100"
+              : "bg-zinc-900 text-zinc-500 hover:text-zinc-300"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function Workbench() {
   const [family, setFamily] = useState<AmmoFamily>("hybrid");
   const [tier, setTier] = useState<AmmoTier | "all">("all");
+  const [range, setRange] = useState<RangeProfile>("all");
+  const [tracking, setTracking] = useState<TrackingProfile>("all");
 
   const query = useQuery({
     queryKey: ["ammo", "reference", family],
@@ -171,38 +239,23 @@ function Workbench() {
       <PageHeader title={TITLE} subtitle={SUBTITLE} />
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex overflow-hidden rounded border border-zinc-800 text-sm">
-          {FAMILIES.map(({ value, label }) => (
-            <button
-              key={value}
-              onClick={() => setFamily(value)}
-              aria-pressed={family === value}
-              className={`px-3 py-1.5 ${
-                family === value
-                  ? "bg-zinc-700 text-zinc-100"
-                  : "bg-zinc-900 text-zinc-500 hover:text-zinc-300"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <div className="flex overflow-hidden rounded border border-zinc-800 text-xs">
-          {TIERS.map(({ value, label }) => (
-            <button
-              key={value}
-              onClick={() => setTier(value)}
-              aria-pressed={tier === value}
-              className={`px-2.5 py-1.5 ${
-                tier === value
-                  ? "bg-zinc-700 text-zinc-100"
-                  : "bg-zinc-900 text-zinc-500 hover:text-zinc-300"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <FilterGroup options={FAMILIES} value={family} onChange={setFamily} />
+        <FilterGroup options={TIERS} value={tier} onChange={setTier} compact />
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <FilterGroup
+          options={RANGE_PROFILES}
+          value={range}
+          onChange={setRange}
+          compact
+        />
+        <FilterGroup
+          options={TRACKING_PROFILES}
+          value={tracking}
+          onChange={setTracking}
+          compact
+        />
       </div>
 
       <QueryResult
@@ -214,7 +267,12 @@ function Workbench() {
         {(rows) => (
           <AmmoTable
             family={family}
-            rows={tier === "all" ? rows : rows.filter((r) => r.tier === tier)}
+            rows={rows.filter(
+              (r) =>
+                (tier === "all" || r.tier === tier) &&
+                (range === "all" || rangeProfileOf(r) === range) &&
+                (tracking === "all" || trackingProfileOf(r) === tracking),
+            )}
           />
         )}
       </QueryResult>
@@ -268,7 +326,7 @@ function AmmoTable({
       demotedKeys={family === "projectile" ? [] : ["capNeedBonusPct"]}
       emptyState={
         <div className="p-6 text-center text-sm text-zinc-500">
-          No charges match this tier.
+          No charges match these filters.
         </div>
       }
       renderRow={(r) => (

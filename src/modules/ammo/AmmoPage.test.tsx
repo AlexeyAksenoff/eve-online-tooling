@@ -60,6 +60,40 @@ const SCORCH: AmmoChargeRow = {
   capNeedBonusPct: 20,
 };
 
+const SPIKE: AmmoChargeRow = {
+  typeId: 4,
+  name: "Spike S",
+  tier: "T2",
+  family: "hybrid",
+  turretClass: "Railgun",
+  em: 0,
+  thermal: 4,
+  kinetic: 4,
+  explosive: 0,
+  totalDamage: 8,
+  optimalMult: 1.8,
+  falloffMult: 1,
+  trackingMult: 0.25,
+  capNeedBonusPct: 0,
+};
+
+const JAVELIN: AmmoChargeRow = {
+  typeId: 5,
+  name: "Javelin S",
+  tier: "T2",
+  family: "hybrid",
+  turretClass: "Railgun",
+  em: 0,
+  thermal: 8,
+  kinetic: 6,
+  explosive: 0,
+  totalDamage: 14,
+  optimalMult: 0.25,
+  falloffMult: 1,
+  trackingMult: 1.25,
+  capNeedBonusPct: 0,
+};
+
 beforeEach(() => {
   invokeMock.mockReset();
   localStorage.clear();
@@ -129,5 +163,33 @@ describe("AmmoPage", () => {
     // Antimatter (12).
     expect(names[0]).toContain("Void S");
     expect(names[1]).toContain("Antimatter Charge S");
+  });
+
+  it("filters rows by range profile (optimal multiplier vs. 1.0)", async () => {
+    mockInvoke({
+      sde_status: () => SDE_OK,
+      ammo_reference: () => [ANTIMATTER, SPIKE],
+    });
+    renderWithQuery(<AmmoPage />);
+
+    await screen.findByText("Antimatter Charge S");
+    fireEvent.click(screen.getByRole("button", { name: "Long range" }));
+
+    expect(screen.queryByText("Antimatter Charge S")).not.toBeInTheDocument();
+    expect(screen.getByText("Spike S")).toBeInTheDocument();
+  });
+
+  it("filters rows by tracking profile", async () => {
+    mockInvoke({
+      sde_status: () => SDE_OK,
+      ammo_reference: () => [VOID, JAVELIN],
+    });
+    renderWithQuery(<AmmoPage />);
+
+    await screen.findByText("Void S");
+    fireEvent.click(screen.getByRole("button", { name: "Tracking +" }));
+
+    expect(screen.queryByText("Void S")).not.toBeInTheDocument();
+    expect(screen.getByText("Javelin S")).toBeInTheDocument();
   });
 });
