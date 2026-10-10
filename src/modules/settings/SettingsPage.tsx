@@ -5,6 +5,7 @@ import { useFightOverlay } from "../pvp/fightOverlayContext";
 import { useFwHomeDefense } from "../faction-warfare/fwHomeDefenseContext";
 import type { NearbyFlipRadius } from "../faction-warfare/homeDefenseAlerts";
 import { useCheckForUpdatesEnabled, useReleaseCheck } from "./useReleaseCheck";
+import { useConfirmBeforeQuit } from "./useConfirmBeforeQuit";
 
 const NEARBY_FLIP_OPTIONS: readonly { key: NearbyFlipRadius; label: string }[] =
   [
@@ -36,6 +37,7 @@ export function SettingsPage() {
   } = useFwHomeDefense();
   const [checkForUpdates, setCheckForUpdates] = useCheckForUpdatesEnabled();
   const release = useReleaseCheck(checkForUpdates);
+  const [confirmBeforeQuit, setConfirmBeforeQuit] = useConfirmBeforeQuit();
 
   return (
     <Page>
@@ -186,6 +188,24 @@ export function SettingsPage() {
               aria-label="Check for updates on startup"
             />
           </div>
+        </div>
+        <div className="flex items-start justify-between gap-4 p-4">
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-zinc-100">
+              Confirm before quit
+            </span>
+            <span className="mt-0.5 block text-xs text-zinc-500">
+              Ask before closing the app window — catches an accidental
+              Alt+F4/⌘Q or a stray click on the window's close button.
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            checked={confirmBeforeQuit}
+            onChange={(e) => setConfirmBeforeQuit(e.currentTarget.checked)}
+            className="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-indigo-500"
+            aria-label="Confirm before quitting the app"
+          />
         </div>
       </div>
     </Page>
