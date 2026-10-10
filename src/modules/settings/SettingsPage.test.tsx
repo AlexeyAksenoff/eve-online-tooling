@@ -84,3 +84,34 @@ describe("Settings: check for updates", () => {
     );
   });
 });
+
+describe("Settings: confirm before quit", () => {
+  beforeEach(() => {
+    mockInvoke({
+      release_check_latest: () => ({
+        currentVersion: "0.71.0",
+        latestVersion: "0.71.0",
+        isOutdated: false,
+        htmlUrl:
+          "https://github.com/th-lange/eve-online-tooling/releases/tag/v0.71.0",
+        publishedAt: "2026-01-01T00:00:00Z",
+      }),
+    });
+  });
+
+  it("defaults the toggle to on", () => {
+    renderWithQuery(<SettingsPage />);
+    expect(
+      screen.getByLabelText("Confirm before quitting the app"),
+    ).toBeChecked();
+  });
+
+  it("persists the toggle to localStorage", () => {
+    renderWithQuery(<SettingsPage />);
+    fireEvent.click(screen.getByLabelText("Confirm before quitting the app"));
+    expect(
+      screen.getByLabelText("Confirm before quitting the app"),
+    ).not.toBeChecked();
+    expect(localStorage.getItem("settings.confirmBeforeQuit")).toBe("false");
+  });
+});
