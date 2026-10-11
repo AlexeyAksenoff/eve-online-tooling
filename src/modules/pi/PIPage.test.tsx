@@ -316,7 +316,10 @@ const NANO_FACTORY_CHAIN: ChainNode = {
 };
 
 describe("PIPage Planner tab", () => {
-  beforeEach(() => invokeMock.mockReset());
+  beforeEach(() => {
+    invokeMock.mockReset();
+    localStorage.clear();
+  });
 
   it("searches via Combo and renders a single-planet badge with the nested chain tree", async () => {
     mockInvoke({
@@ -439,10 +442,118 @@ describe("PIPage Planner tab", () => {
     );
     expect(screen.getByText("Ukomi Superconductors")).toBeInTheDocument();
   });
+
+  it("remembers a planned commodity across a full remount", async () => {
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [],
+      pi_locked_get: () => [],
+      sde_search_pi_commodities: () => [{ id: 9848, name: "Robotics" }],
+      pi_production_chain: () => ROBOTICS_CHAIN,
+    });
+    const first = renderWithQuery(<PIPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Planner" }));
+    fireEvent.change(screen.getByPlaceholderText(/search a p1-p4 commodity/i), {
+      target: { value: "robo" },
+    });
+    fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
+    await screen.findByText("Mechanical Parts");
+
+    // Simulate navigating away and back: unmount entirely (a fresh
+    // QueryClient too, via a brand-new renderWithQuery call) rather than
+    // just re-rendering, so this proves localStorage persistence and not a
+    // React Query cache hit.
+    first.unmount();
+    renderWithQuery(<PIPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Planner" }));
+
+    expect(await screen.findByText("Mechanical Parts")).toBeInTheDocument();
+  });
+
+  it("Clear all removes every planned chain", async () => {
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [],
+      pi_locked_get: () => [],
+      sde_search_pi_commodities: () => [{ id: 9848, name: "Robotics" }],
+      pi_production_chain: () => ROBOTICS_CHAIN,
+    });
+    renderWithQuery(<PIPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Planner" }));
+    fireEvent.change(screen.getByPlaceholderText(/search a p1-p4 commodity/i), {
+      target: { value: "robo" },
+    });
+    fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
+    await screen.findByText("Mechanical Parts");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
+
+    expect(screen.queryByText("Mechanical Parts")).not.toBeInTheDocument();
+    expect(screen.getByText(/pick a p1-p4 commodity/i)).toBeInTheDocument();
+  });
+
+  it("plans multiple commodities at once, each removable independently", async () => {
+    const ALL = [
+      { id: 9848, name: "Robotics" },
+      { id: 2869, name: "Nano-Factory" },
+    ];
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [],
+      pi_locked_get: () => [],
+      sde_search_pi_commodities: (args) => {
+        const { query } = args as { query: string };
+        return ALL.filter((c) =>
+          c.name.toLowerCase().includes(query.toLowerCase()),
+        );
+      },
+      pi_production_chain: (args) => {
+        const { typeId } = args as { typeId: number };
+        return typeId === 9848 ? ROBOTICS_CHAIN : NANO_FACTORY_CHAIN;
+      },
+    });
+    renderWithQuery(<PIPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Planner" }));
+    const search1 = screen.getByPlaceholderText(/search a p1-p4 commodity/i);
+
+    fireEvent.change(search1, { target: { value: "robo" } });
+    fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
+    await screen.findByText("Mechanical Parts");
+
+    // The Combo remounts (fresh key) after every add, so re-query it fresh
+    // rather than reuse the now-detached input from before.
+    const search2 = screen.getByPlaceholderText(/search a p1-p4 commodity/i);
+    fireEvent.change(search2, { target: { value: "nano" } });
+    fireEvent.click(
+      await screen.findByText("Nano-Factory", {}, { timeout: 2000 }),
+    );
+
+    // Both chains render together — nothing was replaced.
+    expect(
+      await screen.findByText("Ukomi Superconductors"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Mechanical Parts")).toBeInTheDocument();
+
+    // Removing one leaves the other.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove Robotics from planner" }),
+    );
+    expect(screen.queryByText("Mechanical Parts")).not.toBeInTheDocument();
+    expect(screen.getByText("Ukomi Superconductors")).toBeInTheDocument();
+  });
 });
 
 describe("PIPage Colonies tab — notes & target products", () => {
-  beforeEach(() => invokeMock.mockReset());
+  beforeEach(() => {
+    invokeMock.mockReset();
+    localStorage.clear();
+  });
 
   it("renders a colony's saved notes and target-product chips", async () => {
     mockInvoke({

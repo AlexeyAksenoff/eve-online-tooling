@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   activeCharacter,
   errorMessage,
@@ -26,6 +31,8 @@ import {
   PrimaryButton,
 } from "../../components/page";
 import { SdeGate } from "../../components/SdeGate";
+import { usePersistentState } from "../../lib/usePersistentState";
+import { STORAGE_KEYS } from "../../lib/storageKeys";
 import {
   EPS,
   extractionAdvice,
@@ -227,55 +234,117 @@ function Workbench() {
 }
 
 function Planner() {
-  const [picked, setPicked] = useState<{ id: number; name: string } | null>(
+  // Persisted across visits/reloads ("remember" — #963) rather than
+  // session-only useState: the whole point is the plan survives navigating
+  // away and coming back, not just a re-render.
+  const [picks, setPicks] = usePersistentState<{ id: number; name: string }[]>(
+    STORAGE_KEYS.piPlannerPicks,
+    [],
+  );
+  // The Combo's own controlled value — always reset to null right after an
+  // add so the search field clears and is ready for the next pick, instead
+  // of locking onto the last-picked commodity's name.
+  const [picker, setPicker] = useState<{ id: number; name: string } | null>(
     null,
   );
-  const chain = useQuery({
-    queryKey: ["pi", "production-chain", picked?.id ?? null],
-    queryFn: () => piProductionChain(picked!.id),
-    enabled: picked != null,
+
+  function addPick(v: { id: number; name: string } | null) {
+    if (v && !picks.some((p) => p.id === v.id)) {
+      setPicks([...picks, v]);
+    }
+    setPicker(null);
+  }
+  function removePick(id: number) {
+    setPicks(picks.filter((p) => p.id !== id));
+  }
+
+  const chains = useQueries({
+    queries: picks.map((p) => ({
+      queryKey: ["pi", "production-chain", p.id],
+      queryFn: () => piProductionChain(p.id),
+    })),
   });
 
   return (
     <div className="mt-4">
-      <Combo
-        label="Commodity"
-        value={picked}
-        onPick={setPicked}
-        search={sdeSearchPiCommodities}
-        placeholder="Search a P1-P4 commodity…"
-      />
+      <div className="flex flex-wrap items-center gap-2">
+        <Combo
+          key={picks.length}
+          label="Commodity"
+          value={picker}
+          onPick={addPick}
+          search={sdeSearchPiCommodities}
+          placeholder="Search a P1-P4 commodity…"
+        />
+        {picks.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setPicks([])}
+            className="mt-5 rounded border border-zinc-700 px-2.5 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+          >
+            Clear all
+          </button>
+        )}
+      </div>
 
-      {chain.isError && (
-        <InlineError message={errorMessage(chain.error)} className="mt-3" />
-      )}
-
-      {!picked && (
+      {picks.length === 0 && (
         <Centered>
           Pick a P1-P4 commodity to see which planet type(s) can produce it
-          alone, and its full production chain down to raw resources.
+          alone, and its full production chain down to raw resources. Add as
+          many as you like — they stay here until you remove them.
         </Centered>
       )}
 
-      {chain.data && (
-        <div className="mt-4 rounded border border-zinc-800 bg-zinc-900/40 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="text-lg font-medium text-zinc-100">
-              {chain.data.name}{" "}
-              <span className="text-xs text-zinc-500">P{chain.data.tier}</span>
+      <div className="mt-4 space-y-4">
+        {picks.map((p, i) => {
+          const chain = chains[i];
+          return (
+            <div
+              key={p.id}
+              className="relative rounded border border-zinc-800 bg-zinc-900/40 p-4"
+            >
+              <button
+                type="button"
+                onClick={() => removePick(p.id)}
+                title="Remove from planner"
+                aria-label={`Remove ${p.name} from planner`}
+                className="absolute right-3 top-3 rounded border border-zinc-700 px-1.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+              >
+                ✕
+              </button>
+
+              {chain.isError && (
+                <InlineError
+                  message={errorMessage(chain.error)}
+                  className="mb-2"
+                />
+              )}
+
+              {chain.data && (
+                <>
+                  <div className="flex flex-wrap items-center justify-between gap-3 pr-6">
+                    <div className="text-lg font-medium text-zinc-100">
+                      {chain.data.name}{" "}
+                      <span className="text-xs text-zinc-500">
+                        P{chain.data.tier}
+                      </span>
+                    </div>
+                    <PlanetBadges
+                      planetTypes={chain.data.planetTypes}
+                      tier={chain.data.tier}
+                    />
+                  </div>
+                  <div className="mt-3 space-y-1">
+                    {chain.data.children.map((c) => (
+                      <ChainRow key={c.typeId} node={c} depth={0} />
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
-            <PlanetBadges
-              planetTypes={chain.data.planetTypes}
-              tier={chain.data.tier}
-            />
-          </div>
-          <div className="mt-3 space-y-1">
-            {chain.data.children.map((c) => (
-              <ChainRow key={c.typeId} node={c} depth={0} />
-            ))}
-          </div>
-        </div>
-      )}
+          );
+        })}
+      </div>
     </div>
   );
 }
