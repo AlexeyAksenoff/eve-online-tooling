@@ -268,7 +268,12 @@ function Planner() {
           </div>
           <div className="mt-3 space-y-1">
             {chain.data.children.map((c) => (
-              <ChainRow key={c.typeId} node={c} depth={0} />
+              <ChainRow
+                key={c.typeId}
+                node={c}
+                depth={0}
+                rootPlanetTypes={new Set(chain.data!.planetTypes)}
+              />
             ))}
           </div>
         </div>
@@ -277,7 +282,19 @@ function Planner() {
   );
 }
 
-function PlanetBadges({ planetTypes }: { planetTypes: string[] }) {
+/** `highlight` is the root product's own single-planet-buildable set — when
+ * given, each badge colors green if it's also in that set ("this planet type
+ * both makes this material *and* can build the whole target alone") or blue
+ * otherwise ("makes this material alone; the rest of the chain needs a
+ * different/imported input"). Omitted for the root's own badge row, which
+ * keeps the single emerald "buildable here" meaning it always had. */
+function PlanetBadges({
+  planetTypes,
+  highlight,
+}: {
+  planetTypes: string[];
+  highlight?: ReadonlySet<string>;
+}) {
   if (planetTypes.length === 0) {
     return (
       <span className="rounded bg-amber-900/40 px-2 py-1 text-xs text-amber-300">
@@ -287,22 +304,46 @@ function PlanetBadges({ planetTypes }: { planetTypes: string[] }) {
   }
   return (
     <div className="flex flex-wrap gap-1">
-      {planetTypes.map((pt) => (
-        <span
-          key={pt}
-          className="rounded bg-emerald-900/40 px-2 py-0.5 text-xs text-emerald-300"
-        >
-          {pt}
-        </span>
-      ))}
+      {planetTypes.map((pt) => {
+        const inRoot = highlight === undefined || highlight.has(pt);
+        return (
+          <span
+            key={pt}
+            className={`rounded px-2 py-0.5 text-xs ${
+              inRoot
+                ? "bg-emerald-900/40 text-emerald-300"
+                : "bg-sky-900/40 text-sky-300"
+            }`}
+            title={
+              highlight === undefined
+                ? undefined
+                : inRoot
+                  ? "Also builds the whole target alone"
+                  : "Makes this material alone — the rest of the chain needs a different or imported input"
+            }
+          >
+            {pt}
+          </span>
+        );
+      })}
     </div>
   );
 }
 
 /** A P1 node has exactly one child — the P0 raw resource it depends on;
  * inline it as "← <name>" instead of a nested bullet, per the planner's
- * design in #882. */
-function ChainRow({ node, depth }: { node: ChainNode; depth: number }) {
+ * design in #882. `rootPlanetTypes` is the top-level product's own
+ * single-planet set, threaded down so every descendant's badges can be
+ * compared against it (#959). */
+function ChainRow({
+  node,
+  depth,
+  rootPlanetTypes,
+}: {
+  node: ChainNode;
+  depth: number;
+  rootPlanetTypes: ReadonlySet<string>;
+}) {
   const p0 = node.tier === 1 ? node.children[0] : null;
   return (
     <div>
@@ -319,15 +360,31 @@ function ChainRow({ node, depth }: { node: ChainNode; depth: number }) {
           </span>
         )}
         {p0 && <span className="text-xs text-zinc-500">← {p0.name} (P0)</span>}
-        {node.tier > 0 && node.planetTypes.length === 0 && (
-          <span className="rounded bg-amber-900/40 px-1.5 text-xs text-amber-300">
-            needs imports
-          </span>
-        )}
+        <PlanetBadges
+          planetTypes={node.planetTypes}
+          highlight={rootPlanetTypes}
+        />
       </div>
+      {p0 && (
+        <div
+          className="flex flex-wrap items-center gap-2 py-0.5 text-sm"
+          style={{ paddingLeft: `${(depth + 1) * 1.25}rem` }}
+        >
+          <span className="text-zinc-600">├─</span>
+          <PlanetBadges
+            planetTypes={p0.planetTypes}
+            highlight={rootPlanetTypes}
+          />
+        </div>
+      )}
       {node.tier > 1 &&
         node.children.map((c) => (
-          <ChainRow key={c.typeId} node={c} depth={depth + 1} />
+          <ChainRow
+            key={c.typeId}
+            node={c}
+            depth={depth + 1}
+            rootPlanetTypes={rootPlanetTypes}
+          />
         ))}
     </div>
   );
