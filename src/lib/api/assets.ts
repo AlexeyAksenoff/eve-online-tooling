@@ -14,6 +14,10 @@ export interface AssetRow {
   /** Character name, or the corporation name for corp-hangar stock. */
   owner: string;
   isCorp: boolean;
+  /** The root station/structure id this stack sits at — stable across
+   *  renders (unlike `station`, a resolved display name), so callers can
+   *  key "how much of type X do I have at location Y" lookups on it. */
+  locationId: number;
   /** NPC station name or "Structure {id}" for player structures. */
   station: string;
   /** Solar system the station sits in, if resolvable from SDE. */

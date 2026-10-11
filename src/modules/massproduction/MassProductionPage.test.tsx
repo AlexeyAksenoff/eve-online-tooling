@@ -21,8 +21,7 @@ const PLAN: MassProductionPlan = {
   ],
   groups: [
     {
-      groupName: "Mineral",
-      categoryName: "Material",
+      categoryName: "Mineral",
       items: [{ typeId: 11399, name: "Morphite", quantity: 5010 }],
     },
   ],
@@ -42,8 +41,7 @@ const HYPOTHETICAL_PLAN: MassProductionPlan = {
   ],
   groups: [
     {
-      groupName: "Mineral",
-      categoryName: "Material",
+      categoryName: "Mineral",
       items: [{ typeId: 34, name: "Tritanium", quantity: 100 }],
     },
   ],
@@ -63,8 +61,7 @@ const MWD_PLAN: MassProductionPlan = {
   ],
   groups: [
     {
-      groupName: "Mineral",
-      categoryName: "Material",
+      categoryName: "Mineral",
       items: [{ typeId: 11399, name: "Morphite", quantity: 5010 }],
     },
   ],
@@ -178,6 +175,60 @@ describe("MassProductionPage", () => {
       }),
     );
     expect(await screen.findByText("Saved ✓")).toBeInTheDocument();
+  });
+
+  it("subtracts owned stock at a picked location, showing only what's still needed", async () => {
+    mockInvoke({
+      sde_status: () => SDE_OK,
+      massprod_plan: () => PLAN,
+      assets_load: () => ({
+        rows: [
+          {
+            typeId: 11399,
+            name: "Morphite",
+            quantity: 5000,
+            sellPrice: 1000,
+            buyPrice: 900,
+            sellValue: 5_000_000,
+            buyValue: 4_500_000,
+            volume: 5000,
+            category: "Material",
+            group: "Mineral",
+            owner: "Alt One",
+            isCorp: false,
+            locationId: 60003760,
+            station: "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
+            solarSystem: "Jita",
+          },
+        ],
+        roots: [],
+        sellTotal: 5_000_000,
+        buyTotal: 4_500_000,
+        volumeTotal: 5000,
+      }),
+    });
+    renderWithQuery(<MassProductionPage />);
+
+    await pasteAndImport("5MN Microwarpdrive II Blueprint");
+    await screen.findByText("Mineral");
+    expect(screen.getByText("5,010")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Load owned stock" }));
+    await screen.findByRole("button", { name: "Reload stock" });
+
+    fireEvent.change(
+      screen.getByTitle(
+        "Subtract what the roster already has stocked at a location",
+      ),
+      {
+        target: {
+          value: "60003760",
+        },
+      },
+    );
+
+    expect(await screen.findByText("10")).toBeInTheDocument();
+    expect(screen.queryByText("5,010")).not.toBeInTheDocument();
   });
 
   it("groups the matched blueprints by tech tier", async () => {
