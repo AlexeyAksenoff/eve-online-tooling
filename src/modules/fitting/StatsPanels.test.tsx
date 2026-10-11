@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { CapGauge } from "./StatsPanels";
-import type { CapStats } from "../../lib/api";
+import { CapGauge, TankResists } from "./StatsPanels";
+import type { CapStats, TankStats } from "../../lib/api";
 
 function cap(overrides: Partial<CapStats>): CapStats {
   return {
@@ -32,5 +32,46 @@ describe("CapGauge", () => {
     );
     expect(screen.getByText(/Empties in/)).toBeInTheDocument();
     expect(screen.queryByText(/Stable/)).not.toBeInTheDocument();
+  });
+});
+
+function tank(overrides: Partial<TankStats>): TankStats {
+  return {
+    shieldHp: 5000,
+    armorHp: 4000,
+    hullHp: 3000,
+    ehp: 12000,
+    shieldResists: [0, 0.4, 0.5, 0.6],
+    armorResists: [0.5, 0.45, 0.25, 0.1],
+    hullResists: [0, 0, 0, 0],
+    shieldRepS: 0,
+    armorRepS: 0,
+    shieldRepSSustained: 0,
+    armorRepSSustained: 0,
+    shieldRrm: 1,
+    armorRrm: 1,
+    hullRrm: 1,
+    rahActive: false,
+    passiveShieldS: 0,
+    ...overrides,
+  };
+}
+
+describe("TankResists", () => {
+  it("shows the dedicated (effective) HP for a layer against a damage type on hover", () => {
+    render(<TankResists tank={tank({})} />);
+
+    // Shield vs Kinetic: 5000 hp / (1 - 0.5) = 10000 effective HP.
+    expect(
+      screen.getByTitle("Shield vs Kin: 10,000 effective HP (50% resisted)"),
+    ).toBeInTheDocument();
+    // Armor vs EM: 4000 hp / (1 - 0.5) = 8000 effective HP.
+    expect(
+      screen.getByTitle("Armor vs EM: 8,000 effective HP (50% resisted)"),
+    ).toBeInTheDocument();
+    // Hull has no resists — effective HP equals raw HP.
+    expect(
+      screen.getByTitle("Hull vs EM: 3,000 effective HP (0% resisted)"),
+    ).toBeInTheDocument();
   });
 });
