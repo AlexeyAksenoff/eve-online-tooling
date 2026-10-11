@@ -331,10 +331,13 @@ function PlanetBadges({
 }
 
 /** A P1 node has exactly one child — the P0 raw resource it depends on;
- * inline it as "← <name>" instead of a nested bullet, per the planner's
- * design in #882. `rootPlanetTypes` is the top-level product's own
- * single-planet set, threaded down so every descendant's badges can be
- * compared against it (#959). */
+ * inline it as "← <name> (P0)" instead of a nested bullet, per the
+ * planner's design in #882. The P0's own `planetTypes` isn't rendered
+ * separately — a P1's own set is already its P0 input's set (that's how
+ * `intersect_planet_types` computes it bottom-up), so a second badge row
+ * would just repeat the one above it. `rootPlanetTypes` is the top-level
+ * product's own single-planet set, threaded down so every descendant's
+ * badges can be compared against it (#959). */
 function ChainRow({
   node,
   depth,
@@ -365,18 +368,6 @@ function ChainRow({
           highlight={rootPlanetTypes}
         />
       </div>
-      {p0 && (
-        <div
-          className="flex flex-wrap items-center gap-2 py-0.5 text-sm"
-          style={{ paddingLeft: `${(depth + 1) * 1.25}rem` }}
-        >
-          <span className="text-zinc-600">├─</span>
-          <PlanetBadges
-            planetTypes={p0.planetTypes}
-            highlight={rootPlanetTypes}
-          />
-        </div>
-      )}
       {node.tier > 1 &&
         node.children.map((c) => (
           <ChainRow

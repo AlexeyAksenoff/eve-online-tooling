@@ -350,7 +350,7 @@ describe("PIPage Planner tab", () => {
     expect(screen.queryByText("Base Metals", { exact: true })).toBeNull();
   });
 
-  it("badges every node including the P0 leaf, not just the root", async () => {
+  it("does not duplicate a P1's planet-type badges in a separate P0 row", async () => {
     mockInvoke({
       sde_status: () => SDE_INSTALLED,
       auth_active_character: () => null,
@@ -368,11 +368,13 @@ describe("PIPage Planner tab", () => {
     fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
     await screen.findByText("Mechanical Parts");
 
-    // Base Metals (the P0 leaf) has 5 planet types; its badge row renders
-    // all of them even though the leaf has no name label of its own.
-    for (const pt of ["Barren", "Gas", "Lava", "Storm"]) {
-      expect(screen.getAllByText(pt).length).toBeGreaterThan(0);
-    }
+    // Storm/Gas/Lava only appear in Reactive Metals' (P1) own planetTypes —
+    // its P0 child Base Metals has the identical set by construction (a
+    // P1's planetTypes is already its P0 input's set), so it must not get a
+    // second copy of the same badges on its own row.
+    expect(screen.getAllByText("Storm")).toHaveLength(1);
+    expect(screen.getAllByText("Gas")).toHaveLength(1);
+    expect(screen.getAllByText("Lava")).toHaveLength(1);
   });
 
   it("colors a material's planet-type badges green when they also build the whole root product, blue otherwise", async () => {
