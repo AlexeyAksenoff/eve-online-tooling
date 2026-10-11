@@ -6,12 +6,27 @@
 // lookup used by a single panel) stay inline in their component file.
 
 import { queryOptions } from "@tanstack/react-query";
-import { marketHistory, marketRegions, sdeSearch } from "./api";
+import { assetsLoad, marketHistory, marketRegions, sdeSearch } from "./api";
 import type { Fresh } from "./api/common";
 
 /** Key for the shopping lists; shared so "add to list" buttons can invalidate
  *  the Shopping page from anywhere. */
 export const SHOPPING_LISTS_KEY = ["shopping", "lists"] as const;
+
+/** The roster's ESI assets — one shared cache entry so the Assets page and
+ *  Mass Production's "still needed" stock picker see the same load without
+ *  either having to re-fetch what the other already has. `staleTime`
+ *  mirrors the backend's own 600s per-character cache (`assets_load`), so a
+ *  second mount within that window reuses the cached payload instead of
+ *  round-tripping through Tauri again. */
+export const assetsKeys = {
+  load: () =>
+    queryOptions({
+      queryKey: ["assets", "load"] as const,
+      queryFn: assetsLoad,
+      staleTime: 600_000,
+    }),
+};
 
 // --- Market ---
 

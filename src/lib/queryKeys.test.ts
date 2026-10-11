@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { SDE_SEARCH_STALE_TIME, marketKeys, sdeKeys } from "./queryKeys";
+import {
+  assetsKeys,
+  SDE_SEARCH_STALE_TIME,
+  marketKeys,
+  sdeKeys,
+} from "./queryKeys";
 
 describe("marketKeys.history", () => {
   it("produces the same queryKey shape regardless of caller, so the popover and the history tab share one cache entry", () => {
@@ -77,5 +82,15 @@ describe("sdeKeys.search", () => {
   it("caches search results for 24 hours, since the SDE is static between refreshes", () => {
     expect(sdeKeys.search("tritanium").staleTime).toBe(SDE_SEARCH_STALE_TIME);
     expect(SDE_SEARCH_STALE_TIME).toBe(24 * 60 * 60 * 1000);
+  });
+});
+
+describe("assetsKeys.load", () => {
+  it("uses the canonical [assets, load] key every caller previously inlined by hand", () => {
+    expect(assetsKeys.load().queryKey).toEqual(["assets", "load"]);
+  });
+
+  it("caches the roster's load for 10 minutes, matching the backend's own per-character cache", () => {
+    expect(assetsKeys.load().staleTime).toBe(600_000);
   });
 });
