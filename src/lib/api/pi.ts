@@ -172,6 +172,10 @@ export interface PlannerSetupItem {
   systemName: string | null;
   planetId: number | null;
   planetName: string | null;
+  /** Material type ids within this item's own production chain that are
+   *  marked "produced on another planned colony, ship it in instead" —
+   *  matched against another item's `typeId` in the same setup. */
+  imports: number[];
 }
 
 /** A named, reusable Planner setup — the picked commodities (with notes and
@@ -198,6 +202,7 @@ export function piPlannerSetupSave(
     systemName?: string | null;
     planetId?: number | null;
     planetName?: string | null;
+    imports?: number[];
   }[],
 ): Promise<PlannerSetup> {
   return invoke<PlannerSetup>("pi_planner_setup_save", { name, items });
