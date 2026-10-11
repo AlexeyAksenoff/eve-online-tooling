@@ -83,7 +83,11 @@ export function TankResists({ tank }: { tank: TankStats }) {
               {formatInt(Math.round(l.hp))}
             </td>
             {l.r.map((v, i) => (
-              <td key={i} className={`pl-1 text-right ${resistClass(v)}`}>
+              <td
+                key={i}
+                title={`${l.name} vs ${DAMAGE_TYPES[i]}: ${formatInt(Math.round(l.hp / (1 - v)))} effective HP (${Math.round(v * 100)}% resisted)`}
+                className={`pl-1 text-right ${resistClass(v)}`}
+              >
                 {Math.round(v * 100)}
               </td>
             ))}
