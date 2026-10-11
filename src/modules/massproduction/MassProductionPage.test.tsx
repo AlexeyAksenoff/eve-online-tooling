@@ -421,6 +421,60 @@ describe("MassProductionPage", () => {
     );
   });
 
+  it("removes a blueprint from the build list and recomputes without it", async () => {
+    const TWO_BLUEPRINT_PLAN: MassProductionPlan = {
+      unresolvedNames: [],
+      matchedBlueprints: [
+        {
+          name: "Widget I Blueprint",
+          typeId: 998,
+          ownedCopies: 5,
+          totalRuns: 5,
+          assumed: null,
+          tier: "Tech I",
+        },
+        MWD_PLAN.matchedBlueprints[0],
+      ],
+      groups: [],
+    };
+    const AFTER_REMOVE_PLAN: MassProductionPlan = {
+      ...MWD_PLAN,
+      matchedBlueprints: [MWD_PLAN.matchedBlueprints[0]],
+    };
+    mockInvoke({
+      sde_status: () => SDE_OK,
+      massprod_plan: (args) => {
+        const { lines } = args as { lines: { name: string }[] };
+        return lines.some((l) => l.name === "Widget I Blueprint")
+          ? TWO_BLUEPRINT_PLAN
+          : AFTER_REMOVE_PLAN;
+      },
+    });
+    renderWithQuery(<MassProductionPage />);
+
+    await pasteAndImport("Widget I Blueprint\n5MN Microwarpdrive II Blueprint");
+    await screen.findByText("Widget I Blueprint");
+    expect(
+      screen.getByText("5MN Microwarpdrive II Blueprint"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove Widget I Blueprint" }),
+    );
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("massprod_plan", {
+        lines: [{ name: "5MN Microwarpdrive II Blueprint", buildRuns: null }],
+        mode: "owned",
+        hypotheticalConfig: { t1Runs: 1, t1Me: 10, t2Me: 2 },
+      }),
+    );
+    expect(screen.queryByText("Widget I Blueprint")).not.toBeInTheDocument();
+    expect(
+      await screen.findByText("5MN Microwarpdrive II Blueprint"),
+    ).toBeInTheDocument();
+  });
+
   it("saves, loads, and deletes a build list", async () => {
     const SAVED_LIST = {
       id: "doctrine",
