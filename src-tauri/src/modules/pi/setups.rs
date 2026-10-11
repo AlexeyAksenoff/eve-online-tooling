@@ -1,0 +1,252 @@
+//! Persisted "setups" for the PI Planner — a named, reusable set of planned
+//! commodities, each with its own notes and (optional) solar
+//! system/planet — so a recurring plan (e.g. a standing Robotics chain
+//! across three colonies) can be saved once and reloaded without re-picking
+//! every commodity and re-typing every note (#965).
+//!
+//! Mirrors Mass Production's "build lists" / Shopping Lists' single-JSON-
+//! document-per-feature approach (`crate::storage::load_data`/`save_data`):
+//! one `pi_planner_setups` document holding every saved setup. Commodity
+//! display names are resolved from the SDE only when read out (same as
+//! `massprod::lists`), so they stay correct across SDE updates; notes and
+//! the chosen system/planet are free-form/user-picked and have no SDE
+//! source of truth to re-resolve against, so they're stored and returned
+//! verbatim.
+
+use serde::{Deserialize, Serialize};
+use tauri::AppHandle;
+
+use crate::sde::Sde;
+use crate::storage;
+
+/// Storage document name (a JSON file in `<app data>/data/`).
+const STORE_KEY: &str = "pi_planner_setups";
+
+// --- Stored shape -----------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Store {
+    setups: Vec<StoredSetup>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredSetup {
+    id: String,
+    name: String,
+    #[serde(default)]
+    items: Vec<StoredItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredItem {
+    type_id: i64,
+    #[serde(default)]
+    notes: String,
+    #[serde(default)]
+    system_id: Option<i64>,
+    #[serde(default)]
+    system_name: Option<String>,
+    #[serde(default)]
+    planet_id: Option<i64>,
+    #[serde(default)]
+    planet_name: Option<String>,
+}
+
+fn load(dir: &std::path::Path) -> Store {
+    storage::load_data(dir, STORE_KEY).unwrap_or_default()
+}
+
+fn save(dir: &std::path::Path, store: &Store) -> Result<(), String> {
+    storage::save_data(dir, STORE_KEY, store)
+}
+
+// --- Resolved shape returned to the frontend --------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupItem {
+    pub type_id: i64,
+    pub name: String,
+    pub notes: String,
+    pub system_id: Option<i64>,
+    pub system_name: Option<String>,
+    pub planet_id: Option<i64>,
+    pub planet_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannerSetup {
+    pub id: String,
+    pub name: String,
+    pub items: Vec<SetupItem>,
+}
+
+/// Resolve a stored setup's commodity names from the SDE.
+fn resolve(sde: &Sde, setup: &StoredSetup) -> PlannerSetup {
+    let ids: Vec<i64> = setup.items.iter().map(|e| e.type_id).collect();
+    let names = sde.type_name_map(&ids).unwrap_or_default();
+    let items = setup
+        .items
+        .iter()
+        .map(|e| SetupItem {
+            type_id: e.type_id,
+            name: names.get(e.type_id),
+            notes: e.notes.clone(),
+            system_id: e.system_id,
+            system_name: e.system_name.clone(),
+            planet_id: e.planet_id,
+            planet_name: e.planet_name.clone(),
+        })
+        .collect();
+    PlannerSetup {
+        id: setup.id.clone(),
+        name: setup.name.clone(),
+        items,
+    }
+}
+
+// --- Commands ---------------------------------------------------------------
+
+/// Every saved planner setup (commodity names resolved from the SDE).
+#[tauri::command]
+pub fn pi_planner_setups(app: AppHandle) -> Result<Vec<PlannerSetup>, String> {
+    let (dir, sde) = crate::sde::dir_and_sde(&app)?;
+    let store = load(&dir);
+    Ok(store.setups.iter().map(|s| resolve(&sde, s)).collect())
+}
+
+/// One item to save: a picked commodity, its notes, and the (optional)
+/// system/planet the user assigned it — the frontend already has all of
+/// this from the current working plan, so saving needs no SDE lookups.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSetupItem {
+    pub type_id: i64,
+    #[serde(default)]
+    pub notes: String,
+    #[serde(default)]
+    pub system_id: Option<i64>,
+    #[serde(default)]
+    pub system_name: Option<String>,
+    #[serde(default)]
+    pub planet_id: Option<i64>,
+    #[serde(default)]
+    pub planet_name: Option<String>,
+}
+
+/// Save the current planner picks under a name, returning the resolved
+/// saved setup. The id is a slug of the name, de-duplicated with a numeric
+/// suffix (same scheme as `shopping_create_list`/`massprod_save_list`).
+/// Every saved setup is user-removable.
+#[tauri::command]
+pub fn pi_planner_setup_save(
+    app: AppHandle,
+    name: String,
+    items: Vec<SaveSetupItem>,
+) -> Result<PlannerSetup, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("setup name can't be empty".into());
+    }
+    let (dir, sde) = crate::sde::dir_and_sde(&app)?;
+    let mut store = load(&dir);
+
+    let base: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect();
+    let base = base.trim_matches('-').to_string();
+    let base = if base.is_empty() {
+        "setup".to_string()
+    } else {
+        base
+    };
+    let mut id = base.clone();
+    let mut n = 2;
+    while store.setups.iter().any(|s| s.id == id) {
+        id = format!("{base}-{n}");
+        n += 1;
+    }
+
+    let setup = StoredSetup {
+        id,
+        name,
+        items: items
+            .into_iter()
+            .map(|i| StoredItem {
+                type_id: i.type_id,
+                notes: i.notes,
+                system_id: i.system_id,
+                system_name: i.system_name,
+                planet_id: i.planet_id,
+                planet_name: i.planet_name,
+            })
+            .collect(),
+    };
+    store.setups.push(setup.clone());
+    save(&dir, &store)?;
+    Ok(resolve(&sde, &setup))
+}
+
+/// Delete a saved planner setup (no-op if already absent).
+#[tauri::command]
+pub fn pi_planner_setup_delete(app: AppHandle, id: String) -> Result<(), String> {
+    let (dir, _sde) = crate::sde::dir_and_sde(&app)?;
+    let mut store = load(&dir);
+    store.setups.retain(|s| s.id != id);
+    save(&dir, &store)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sde::test_sde;
+
+    fn fixture() -> Sde {
+        test_sde(
+            "CREATE TABLE invTypes(typeID INT, groupID INT, typeName TEXT, volume REAL);
+             INSERT INTO invTypes VALUES (9848, 1, 'Robotics', 0.01);",
+        )
+    }
+
+    #[test]
+    fn resolve_fills_in_sde_name_and_carries_notes_system_planet() {
+        let sde = fixture();
+        let setup = StoredSetup {
+            id: "jita-industry".into(),
+            name: "Jita industry".into(),
+            items: vec![
+                StoredItem {
+                    type_id: 9848,
+                    notes: "stage 2: Robotics run".into(),
+                    system_id: Some(30000142),
+                    system_name: Some("Jita".into()),
+                    planet_id: Some(40009082),
+                    planet_name: Some("Jita IV".into()),
+                },
+                StoredItem {
+                    type_id: 999999,
+                    notes: String::new(),
+                    system_id: None,
+                    system_name: None,
+                    planet_id: None,
+                    planet_name: None,
+                },
+            ],
+        };
+
+        let resolved = resolve(&sde, &setup);
+
+        assert_eq!(resolved.items[0].name, "Robotics");
+        assert_eq!(resolved.items[0].notes, "stage 2: Robotics run");
+        assert_eq!(resolved.items[0].system_name.as_deref(), Some("Jita"));
+        assert_eq!(resolved.items[0].planet_name.as_deref(), Some("Jita IV"));
+        // Unknown type id (stale SDE) falls back to `TypeNameMap`'s own
+        // "Type <id>" placeholder instead of erroring the whole setup out.
+        assert_eq!(resolved.items[1].name, "Type 999999");
+        assert_eq!(resolved.items[1].system_id, None);
+    }
+}

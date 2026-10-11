@@ -5,6 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { FolderOpen, Save, Trash2 } from "lucide-react";
 import {
   activeCharacter,
   errorMessage,
@@ -12,12 +13,18 @@ import {
   piLockedGet,
   piLockedSet,
   piOverview,
+  piPlanetsInSystem,
+  piPlannerSetupDelete,
+  piPlannerSetups,
+  piPlannerSetupSave,
   piProductionChain,
   piShowInGame,
   sdeSearchPiCommodities,
+  systemSearch,
   type ChainNode,
   type ColonyView,
   type ExtractorView,
+  type PlannerSetupItem,
   type StorageView,
 } from "../../lib/api";
 import { InlineError } from "../../components/InlineError";
@@ -233,11 +240,29 @@ function Workbench() {
   );
 }
 
+/** Query key for saved planner setups — scoped to this file; nothing else
+ *  in the app reads or invalidates it. */
+const PI_SETUPS_KEY = ["pi", "planner-setups"] as const;
+
+/** One commodity planned on the Planner tab: the pick itself, free-text
+ * notes, and the (optional) solar system/planet it's assigned to build on.
+ * Persisted as-is (see `picks` below) and is exactly the shape a setup is
+ * saved/loaded as (#965). */
+interface PlannerPick {
+  id: number;
+  name: string;
+  notes: string;
+  systemId: number | null;
+  systemName: string | null;
+  planetId: number | null;
+  planetName: string | null;
+}
+
 function Planner() {
   // Persisted across visits/reloads ("remember" — #963) rather than
   // session-only useState: the whole point is the plan survives navigating
   // away and coming back, not just a re-render.
-  const [picks, setPicks] = usePersistentState<{ id: number; name: string }[]>(
+  const [picks, setPicks] = usePersistentState<PlannerPick[]>(
     STORAGE_KEYS.piPlannerPicks,
     [],
   );
@@ -250,12 +275,39 @@ function Planner() {
 
   function addPick(v: { id: number; name: string } | null) {
     if (v && !picks.some((p) => p.id === v.id)) {
-      setPicks([...picks, v]);
+      setPicks([
+        ...picks,
+        {
+          id: v.id,
+          name: v.name,
+          notes: "",
+          systemId: null,
+          systemName: null,
+          planetId: null,
+          planetName: null,
+        },
+      ]);
     }
     setPicker(null);
   }
   function removePick(id: number) {
     setPicks(picks.filter((p) => p.id !== id));
+  }
+  function updatePick(id: number, patch: Partial<PlannerPick>) {
+    setPicks(picks.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  }
+  function loadSetup(items: PlannerSetupItem[]) {
+    setPicks(
+      items.map((i) => ({
+        id: i.typeId,
+        name: i.name,
+        notes: i.notes,
+        systemId: i.systemId,
+        systemName: i.systemName,
+        planetId: i.planetId,
+        planetName: i.planetName,
+      })),
+    );
   }
 
   const chains = useQueries({
@@ -267,84 +319,353 @@ function Planner() {
 
   return (
     <div className="mt-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Combo
-          key={picks.length}
-          label="Commodity"
-          value={picker}
-          onPick={addPick}
-          search={sdeSearchPiCommodities}
-          placeholder="Search a P1-P4 commodity…"
-        />
-        {picks.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setPicks([])}
-            className="mt-5 rounded border border-zinc-700 px-2.5 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-          >
-            Clear all
-          </button>
-        )}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Combo
+            key={picks.length}
+            label="Commodity"
+            value={picker}
+            onPick={addPick}
+            search={sdeSearchPiCommodities}
+            placeholder="Search a P1-P4 commodity…"
+          />
+          {picks.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setPicks([])}
+              className="mt-5 rounded border border-zinc-700 px-2.5 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+            >
+              Clear all
+            </button>
+          )}
+        </div>
+        <SetupsPanel picks={picks} onLoad={loadSetup} />
       </div>
 
       {picks.length === 0 && (
         <Centered>
           Pick a P1-P4 commodity to see which planet type(s) can produce it
           alone, and its full production chain down to raw resources. Add as
-          many as you like — they stay here until you remove them.
+          many as you like, note what each is for and where you're building it —
+          they stay here until you remove them, or save the whole set as a
+          reusable setup.
         </Centered>
       )}
 
       <div className="mt-4 space-y-4">
-        {picks.map((p, i) => {
-          const chain = chains[i];
-          return (
-            <div
-              key={p.id}
-              className="relative rounded border border-zinc-800 bg-zinc-900/40 p-4"
-            >
-              <button
-                type="button"
-                onClick={() => removePick(p.id)}
-                title="Remove from planner"
-                aria-label={`Remove ${p.name} from planner`}
-                className="absolute right-3 top-3 rounded border border-zinc-700 px-1.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-              >
-                ✕
-              </button>
-
-              {chain.isError && (
-                <InlineError
-                  message={errorMessage(chain.error)}
-                  className="mb-2"
-                />
-              )}
-
-              {chain.data && (
-                <>
-                  <div className="flex flex-wrap items-center justify-between gap-3 pr-6">
-                    <div className="text-lg font-medium text-zinc-100">
-                      {chain.data.name}{" "}
-                      <span className="text-xs text-zinc-500">
-                        P{chain.data.tier}
-                      </span>
-                    </div>
-                    <PlanetBadges
-                      planetTypes={chain.data.planetTypes}
-                      tier={chain.data.tier}
-                    />
-                  </div>
-                  <div className="mt-3 space-y-1">
-                    {chain.data.children.map((c) => (
-                      <ChainRow key={c.typeId} node={c} depth={0} />
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          );
-        })}
+        {picks.map((p, i) => (
+          <PlanCard
+            key={p.id}
+            pick={p}
+            chain={chains[i]}
+            onRemove={() => removePick(p.id)}
+            onUpdate={(patch) => updatePick(p.id, patch)}
+          />
+        ))}
       </div>
+    </div>
+  );
+}
+
+function PlanCard({
+  pick,
+  chain,
+  onRemove,
+  onUpdate,
+}: {
+  pick: PlannerPick;
+  chain: { isError: boolean; error: unknown; data: ChainNode | undefined };
+  onRemove: () => void;
+  onUpdate: (patch: Partial<PlannerPick>) => void;
+}) {
+  // null = not editing → show the saved notes.
+  const [notesDraft, setNotesDraft] = useState<string | null>(null);
+  const planets = useQuery({
+    queryKey: ["pi", "planets-in-system", pick.systemId],
+    queryFn: () => piPlanetsInSystem(pick.systemId!),
+    enabled: pick.systemId != null,
+  });
+
+  function commitNotes() {
+    if (notesDraft === null) return;
+    const next = notesDraft;
+    setNotesDraft(null);
+    if (next !== pick.notes) onUpdate({ notes: next });
+  }
+
+  return (
+    <div className="relative rounded border border-zinc-800 bg-zinc-900/40 p-4">
+      <button
+        type="button"
+        onClick={onRemove}
+        title="Remove from planner"
+        aria-label={`Remove ${pick.name} from planner`}
+        className="absolute right-3 top-3 rounded border border-zinc-700 px-1.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+      >
+        ✕
+      </button>
+
+      {chain.isError && (
+        <InlineError message={errorMessage(chain.error)} className="mb-2" />
+      )}
+
+      {chain.data && (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3 pr-6">
+            <div className="text-lg font-medium text-zinc-100">
+              {chain.data.name}{" "}
+              <span className="text-xs text-zinc-500">P{chain.data.tier}</span>
+            </div>
+            <PlanetBadges
+              planetTypes={chain.data.planetTypes}
+              tier={chain.data.tier}
+            />
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Combo
+              label="System"
+              value={
+                pick.systemId != null
+                  ? { id: pick.systemId, name: pick.systemName ?? "" }
+                  : null
+              }
+              onPick={(v) =>
+                onUpdate({
+                  systemId: v?.id ?? null,
+                  systemName: v?.name ?? null,
+                  // A new system invalidates whichever planet was picked
+                  // under the old one.
+                  planetId: null,
+                  planetName: null,
+                })
+              }
+              search={systemSearch}
+              placeholder="Solar system…"
+              width="w-40"
+            />
+            {pick.systemId != null && (
+              <label className="flex flex-col gap-1 text-xs text-zinc-400">
+                Planet
+                <select
+                  value={pick.planetId ?? ""}
+                  onChange={(e) => {
+                    const id = Number(e.currentTarget.value) || null;
+                    const name =
+                      planets.data?.find((pl) => pl.id === id)?.name ?? null;
+                    onUpdate({ planetId: id, planetName: name });
+                  }}
+                  className="w-32 rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
+                >
+                  <option value="">
+                    {planets.isLoading ? "Loading…" : "Pick a planet…"}
+                  </option>
+                  {planets.data?.map((pl) => (
+                    <option key={pl.id} value={pl.id}>
+                      {pl.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+
+          <textarea
+            value={notesDraft ?? pick.notes}
+            onChange={(e) => setNotesDraft(e.currentTarget.value)}
+            onBlur={commitNotes}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setNotesDraft(null);
+            }}
+            placeholder="Notes — what you're building, sub-products for a later cycle…"
+            rows={2}
+            className="mt-2 w-full resize-y rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-200 outline-none placeholder:text-zinc-500"
+          />
+
+          <div className="mt-3 space-y-1">
+            {chain.data.children.map((c) => (
+              <ChainRow key={c.typeId} node={c} depth={0} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** "Setups ▾" — save the current picks (with their notes/system/planet)
+ * under a name, or load/delete a previously saved one. Loading replaces
+ * the whole working plan, same semantics as Mass Production's build-list
+ * panel this mirrors. */
+function SetupsPanel({
+  picks,
+  onLoad,
+}: {
+  picks: PlannerPick[];
+  onLoad: (items: PlannerSetupItem[]) => void;
+}) {
+  const qc = useQueryClient();
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const setupsQuery = useQuery({
+    queryKey: PI_SETUPS_KEY,
+    queryFn: piPlannerSetups,
+    enabled: browseOpen,
+  });
+
+  const save = useMutation({
+    mutationFn: (setupName: string) =>
+      piPlannerSetupSave(
+        setupName,
+        picks.map((p) => ({
+          typeId: p.id,
+          notes: p.notes,
+          systemId: p.systemId,
+          systemName: p.systemName,
+          planetId: p.planetId,
+          planetName: p.planetName,
+        })),
+      ),
+    onSuccess: () => {
+      setSaveOpen(false);
+      setName("");
+      setSaveError(null);
+      void qc.invalidateQueries({ queryKey: PI_SETUPS_KEY });
+    },
+    onError: (e) => setSaveError(errorMessage(e)),
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => piPlannerSetupDelete(id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: PI_SETUPS_KEY }),
+  });
+
+  const canSave = picks.length > 0;
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => {
+            setBrowseOpen((o) => !o);
+            setSaveOpen(false);
+          }}
+          className="flex items-center gap-1.5 rounded border border-zinc-700 px-2 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
+        >
+          <FolderOpen size={13} />
+          Setups
+        </button>
+        {browseOpen && (
+          <>
+            <div
+              className="fixed inset-0 z-10"
+              onClick={() => setBrowseOpen(false)}
+            />
+            <div className="absolute right-0 z-20 mt-1 w-72 rounded border border-zinc-700 bg-zinc-900 p-2 shadow-lg">
+              {setupsQuery.isLoading && (
+                <div className="px-2 py-1 text-xs text-zinc-500">Loading…</div>
+              )}
+              {setupsQuery.data?.length === 0 && (
+                <div className="px-2 py-1 text-xs text-zinc-500">
+                  No saved setups yet.
+                </div>
+              )}
+              {setupsQuery.data?.map((s) => (
+                <div
+                  key={s.id}
+                  className="flex items-center justify-between gap-2 rounded px-2 py-1 hover:bg-zinc-800"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onLoad(s.items);
+                      setBrowseOpen(false);
+                    }}
+                    className="flex-1 truncate text-left text-xs text-zinc-200"
+                    title={`Load "${s.name}" (${s.items.length} commodities)`}
+                  >
+                    {s.name}
+                    <span className="ml-1.5 text-zinc-500">
+                      ({s.items.length})
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => remove.mutate(s.id)}
+                    aria-label={`Delete ${s.name}`}
+                    title="Delete this setup"
+                    className="shrink-0 text-zinc-500 hover:text-rose-400"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {canSave && (
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => {
+              setSaveOpen((o) => !o);
+              setBrowseOpen(false);
+            }}
+            className="flex items-center gap-1.5 rounded border border-zinc-700 px-2 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
+          >
+            <Save size={13} />
+            {save.isSuccess && !saveOpen ? "Saved ✓" : "Save setup…"}
+          </button>
+          {saveOpen && (
+            <>
+              <div
+                className="fixed inset-0 z-10"
+                onClick={() => setSaveOpen(false)}
+              />
+              <div className="absolute right-0 z-20 mt-1 w-64 rounded border border-zinc-700 bg-zinc-900 p-2 shadow-lg">
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && name.trim())
+                      save.mutate(name.trim());
+                  }}
+                  placeholder={`Setup — ${new Date().toLocaleDateString()}`}
+                  autoFocus
+                  className="w-full rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-100 outline-none placeholder:text-zinc-500"
+                />
+                <div className="mt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSaveOpen(false)}
+                    className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => name.trim() && save.mutate(name.trim())}
+                    disabled={name.trim().length === 0 || save.isPending}
+                    className="rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+                  >
+                    {save.isPending ? "Saving…" : "Save"}
+                  </button>
+                </div>
+                <InlineError
+                  message={saveError}
+                  className="mt-1 text-xs text-rose-400"
+                />
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

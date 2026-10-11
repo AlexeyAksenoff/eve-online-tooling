@@ -277,4 +277,54 @@ impl Sde {
         rows.collect::<Result<HashMap<_, _>, _>>()
             .map_err(Into::into)
     }
+
+    /// A solar system's planets `(itemID, itemName)`, ordered by id (which
+    /// tracks orbit order — "System I" through "System VIII"). `groupID = 7`
+    /// is `invGroups`' "Planet" category; `mapDenormalize` holds every
+    /// celestial, not just planets, so this filters to just that group. For
+    /// the PI Planner's "where are you building this" picker (#965).
+    pub fn planets_in_system(&self, system_id: i64) -> Result<Vec<(i64, String)>, SdeError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT itemID, itemName FROM mapDenormalize
+             WHERE solarSystemID = ?1 AND groupID = 7
+             ORDER BY itemID",
+        )?;
+        let rows = stmt.query_map(params![system_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_sde;
+
+    #[test]
+    fn planets_in_system_filters_to_group_seven_ordered_by_id() {
+        let sde = test_sde(
+            "CREATE TABLE mapDenormalize(itemID INT, itemName TEXT, solarSystemID INT, groupID INT);
+             INSERT INTO mapDenormalize VALUES
+               (40009082, 'Jita 4', 30000142, 7),
+               (40009077, 'Jita 1', 30000142, 7),
+               (40009078, 'Jita 2', 30000142, 7),
+               (99999999, 'Jita 4 - Moon 1', 30000142, 8),
+               (11111111, 'Amarr 1', 30002187, 7);",
+        );
+        let planets = sde.planets_in_system(30000142).unwrap();
+        assert_eq!(
+            planets,
+            vec![
+                (40009077, "Jita 1".to_string()),
+                (40009078, "Jita 2".to_string()),
+                (40009082, "Jita 4".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn planets_in_system_is_empty_for_an_unknown_system() {
+        let sde = test_sde(
+            "CREATE TABLE mapDenormalize(itemID INT, itemName TEXT, solarSystemID INT, groupID INT);",
+        );
+        assert!(sde.planets_in_system(30000142).unwrap().is_empty());
+    }
 }

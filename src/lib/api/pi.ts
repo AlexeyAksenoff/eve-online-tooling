@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { IdName } from "./common";
 
 // --- Planetary Interaction ---
 
@@ -136,4 +137,62 @@ export interface ChainNode {
  */
 export function piProductionChain(typeId: number): Promise<ChainNode> {
   return invoke<ChainNode>("pi_production_chain", { typeId });
+}
+
+/**
+ * A solar system's planets, for the Planner's "where are you building
+ * this" picker — call once a system is chosen (via `systemSearch`), then
+ * present the result as a small fixed list (a system has at most ~8
+ * planets, no search needed).
+ */
+export function piPlanetsInSystem(systemId: number): Promise<IdName[]> {
+  return invoke<IdName[]>("pi_planets_in_system", { systemId });
+}
+
+// --- Planner setups (#965) ---
+
+/** One planned commodity in a saved setup: the commodity, its notes, and
+ * the (optional) solar system/planet it's assigned to. */
+export interface PlannerSetupItem {
+  typeId: number;
+  name: string;
+  notes: string;
+  systemId: number | null;
+  systemName: string | null;
+  planetId: number | null;
+  planetName: string | null;
+}
+
+/** A named, reusable Planner setup — the picked commodities (with notes and
+ * system/planet assignments) saved for replay. */
+export interface PlannerSetup {
+  id: string;
+  name: string;
+  items: PlannerSetupItem[];
+}
+
+/** Every saved planner setup. */
+export function piPlannerSetups(): Promise<PlannerSetup[]> {
+  return invoke<PlannerSetup[]>("pi_planner_setups");
+}
+
+/** Save the current planner picks (with notes/system/planet) under a name,
+ * returning the saved setup. */
+export function piPlannerSetupSave(
+  name: string,
+  items: {
+    typeId: number;
+    notes?: string;
+    systemId?: number | null;
+    systemName?: string | null;
+    planetId?: number | null;
+    planetName?: string | null;
+  }[],
+): Promise<PlannerSetup> {
+  return invoke<PlannerSetup>("pi_planner_setup_save", { name, items });
+}
+
+/** Delete a saved planner setup. */
+export function piPlannerSetupDelete(id: string): Promise<void> {
+  return invoke<void>("pi_planner_setup_delete", { id });
 }
