@@ -58,6 +58,11 @@ struct StoredItem {
     /// same free-form pass-through as notes/system/planet).
     #[serde(default)]
     imports: Vec<i64>,
+    /// A user-chosen display name for this item, overriding the frontend's
+    /// own "System · Planet · Product" default — `None` means "still using
+    /// the auto-derived default", not "no name".
+    #[serde(default)]
+    label: Option<String>,
 }
 
 fn load(dir: &std::path::Path) -> Store {
@@ -81,6 +86,7 @@ pub struct SetupItem {
     pub planet_id: Option<i64>,
     pub planet_name: Option<String>,
     pub imports: Vec<i64>,
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,6 +113,7 @@ fn resolve(sde: &Sde, setup: &StoredSetup) -> PlannerSetup {
             planet_id: e.planet_id,
             planet_name: e.planet_name.clone(),
             imports: e.imports.clone(),
+            label: e.label.clone(),
         })
         .collect();
     PlannerSetup {
@@ -145,6 +152,8 @@ pub struct SaveSetupItem {
     pub planet_name: Option<String>,
     #[serde(default)]
     pub imports: Vec<i64>,
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 /// Save the current planner picks under a name, returning the resolved
@@ -195,6 +204,7 @@ pub fn pi_planner_setup_save(
                 planet_id: i.planet_id,
                 planet_name: i.planet_name,
                 imports: i.imports,
+                label: i.label,
             })
             .collect(),
     };
@@ -239,6 +249,7 @@ mod tests {
                     planet_id: Some(40009082),
                     planet_name: Some("Jita IV".into()),
                     imports: vec![],
+                    label: None,
                 },
                 StoredItem {
                     type_id: 999999,
@@ -248,6 +259,7 @@ mod tests {
                     planet_id: None,
                     planet_name: None,
                     imports: vec![],
+                    label: None,
                 },
             ],
         };
@@ -281,11 +293,38 @@ mod tests {
                 // another colony in the same setup instead of being
                 // produced locally.
                 imports: vec![9838],
+                label: None,
             }],
         };
 
         let resolved = resolve(&sde, &setup);
 
         assert_eq!(resolved.items[0].imports, vec![9838]);
+    }
+
+    #[test]
+    fn resolve_carries_a_custom_label_through_unchanged() {
+        let sde = fixture();
+        let setup = StoredSetup {
+            id: "multi-colony".into(),
+            name: "Multi colony".into(),
+            items: vec![StoredItem {
+                type_id: 9848,
+                notes: String::new(),
+                system_id: None,
+                system_name: None,
+                planet_id: None,
+                planet_name: None,
+                imports: vec![],
+                label: Some("Mechanical Parts factory".into()),
+            }],
+        };
+
+        let resolved = resolve(&sde, &setup);
+
+        assert_eq!(
+            resolved.items[0].label.as_deref(),
+            Some("Mechanical Parts factory")
+        );
     }
 }
