@@ -133,14 +133,14 @@ pub struct PlanItem {
     pub quantity: i64,
 }
 
-/// Aggregated materials for one `invGroups.groupName` bucket (e.g. "Mineral",
-/// "Refined Commodities - Tier 2") — finer than category, which is what
-/// actually separates PI tiers, minerals, and composites from each other.
+/// Aggregated materials for one `invCategories.categoryName` bucket (e.g.
+/// "Ship Equipment", "Ammunition & Charges") — coarse on purpose: grouping
+/// by the finer `invGroups.groupName` instead used to split every T1 module
+/// subtype (Armor Coating, Combat Drone, Auxiliary Power Core, ...) into its
+/// own tiny section, scattering what's really one "stuff to buy" bucket.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MaterialGroup {
-    pub group_name: String,
-    /// The group's parent `invCategories.categoryName`, for a secondary label.
     pub category_name: String,
     pub items: Vec<PlanItem>,
 }
@@ -465,19 +465,16 @@ pub async fn massprod_plan(
         }
     }
 
-    let group_names = crate::sde::cached_group_names(&dir)?;
     let category_names = crate::sde::cached_category_names(&dir)?;
     let mut groups_by_name: HashMap<String, MaterialGroup> = HashMap::new();
     for (type_id, quantity) in material_totals {
-        let group_name = group_names
+        let category_name = category_names
             .get(&type_id)
             .cloned()
             .unwrap_or_else(|| "Other".to_string());
-        let category_name = category_names.get(&type_id).cloned().unwrap_or_default();
         groups_by_name
-            .entry(group_name.clone())
+            .entry(category_name.clone())
             .or_insert_with(|| MaterialGroup {
-                group_name,
                 category_name,
                 items: Vec::new(),
             })
@@ -493,7 +490,7 @@ pub async fn massprod_plan(
     for g in &mut groups {
         g.items.sort_by(|a, b| a.name.cmp(&b.name));
     }
-    groups.sort_by(|a, b| a.group_name.cmp(&b.group_name));
+    groups.sort_by(|a, b| a.category_name.cmp(&b.category_name));
 
     Ok(MassProductionPlan {
         unresolved_names,

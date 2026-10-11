@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import {
+  assetsLoad,
   errorMessage,
   isAuthRequired,
   massprodDeleteList,
@@ -19,6 +20,7 @@ import {
   shoppingAddItem,
   shoppingCreateList,
   DEFAULT_HYPOTHETICAL_CONFIG,
+  type AssetRow,
   type BlueprintLine,
   type BuildList,
   type HypotheticalConfig,
@@ -554,6 +556,35 @@ function groupByTier(
     });
 }
 
+/** One station/structure the roster has assets at — the selector's option
+ *  list, derived from a loaded `AssetRow[]` rather than a dedicated
+ *  "locations I have access to" lookup (none exists yet): if the roster has
+ *  stock sitting there, it has hangar access there. */
+interface AssetLocation {
+  id: number;
+  label: string;
+}
+
+function assetLocations(rows: AssetRow[]): AssetLocation[] {
+  const byId = new Map<number, string>();
+  for (const r of rows) byId.set(r.locationId, r.station);
+  return [...byId.entries()]
+    .map(([id, label]) => ({ id, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/** Owned quantity per `typeId:locationId`, summed across every owner
+ *  (personal + corp hangar) — the "still needed" subtraction doesn't care
+ *  which roster member's hangar it's sitting in, only that it's there. */
+function ownedQuantityIndex(rows: AssetRow[]): Map<string, number> {
+  const idx = new Map<string, number>();
+  for (const r of rows) {
+    const key = `${r.typeId}:${r.locationId}`;
+    idx.set(key, (idx.get(key) ?? 0) + r.quantity);
+  }
+  return idx;
+}
+
 function PlanResult({
   plan,
   mode,
@@ -566,6 +597,14 @@ function PlanResult({
   onCommitBuildRuns: (typeId: number, value: number | null) => void;
 }) {
   const copiesHeader = mode === "hypothetical" ? "Assumed ME" : "Owned copies";
+
+  // Loaded on demand (a button click, not auto-fetched) — pulling the whole
+  // roster's ESI assets on every Planner visit would be wasteful for anyone
+  // not using the "still needed" location picker.
+  const assetsMut = useMutation({ mutationFn: () => assetsLoad() });
+  const assetRows = useMemo(() => assetsMut.data?.rows ?? [], [assetsMut.data]);
+  const locations = useMemo(() => assetLocations(assetRows), [assetRows]);
+  const ownedIndex = useMemo(() => ownedQuantityIndex(assetRows), [assetRows]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -604,8 +643,35 @@ function PlanResult({
         </div>
       ) : (
         <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-2 text-xs text-zinc-500">
+            <button
+              onClick={() => assetsMut.mutate()}
+              disabled={assetsMut.isPending}
+              className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+            >
+              {assetsMut.isPending
+                ? "Loading stock…"
+                : assetsMut.isSuccess
+                  ? "Reload stock"
+                  : "Load owned stock"}
+            </button>
+            {assetsMut.isSuccess && (
+              <span>
+                Pick a location per group below to subtract what the roster
+                already has there.
+              </span>
+            )}
+            <InlineError
+              message={assetsMut.isError ? errorMessage(assetsMut.error) : null}
+            />
+          </div>
           {plan.groups.map((g) => (
-            <GroupSection key={g.groupName} group={g} />
+            <GroupSection
+              key={g.categoryName}
+              group={g}
+              locations={locations}
+              ownedIndex={ownedIndex}
+            />
           ))}
         </div>
       )}
@@ -751,10 +817,30 @@ function BuildRunsCell({
   );
 }
 
-function GroupSection({ group }: { group: MaterialGroup }) {
+function GroupSection({
+  group,
+  locations,
+  ownedIndex,
+}: {
+  group: MaterialGroup;
+  locations: AssetLocation[];
+  ownedIndex: Map<string, number>;
+}) {
   const [collapsed, setCollapsed] = useState(false);
+  const [locationId, setLocationId] = useState<number | "">("");
   const { copied, copy } = useCopyToClipboard(1500);
-  const multibuy = group.items
+
+  // Blank location (default): the full needed quantity, unchanged. A picked
+  // location subtracts what the roster already has stocked there, so the
+  // table and the Multibuy/save actions below only reflect what's still
+  // actually needed.
+  const items = group.items.map((it) => {
+    if (locationId === "") return it;
+    const owned = ownedIndex.get(`${it.typeId}:${locationId}`) ?? 0;
+    return { ...it, quantity: Math.max(0, it.quantity - owned) };
+  });
+  const stillNeeded = items.filter((it) => it.quantity > 0);
+  const multibuy = stillNeeded
     .map((i) => `${i.name}\t${i.quantity}`)
     .join("\n");
 
@@ -766,12 +852,29 @@ function GroupSection({ group }: { group: MaterialGroup }) {
           className="flex items-center gap-2 text-left text-sm font-medium text-zinc-200"
         >
           <span className="text-zinc-500">{collapsed ? "▸" : "▾"}</span>
-          {group.groupName}
+          {group.categoryName}
           <span className="text-xs font-normal text-zinc-500">
-            ({group.categoryName} · {group.items.length} items)
+            ({group.items.length} item{group.items.length === 1 ? "" : "s"})
           </span>
         </button>
         <div className="flex items-center gap-2">
+          <select
+            value={locationId}
+            onChange={(e) =>
+              setLocationId(
+                e.currentTarget.value ? Number(e.currentTarget.value) : "",
+              )
+            }
+            title="Subtract what the roster already has stocked at a location"
+            className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 outline-none"
+          >
+            <option value="">All locations — full quantity</option>
+            {locations.map((loc) => (
+              <option key={loc.id} value={loc.id}>
+                {loc.label}
+              </option>
+            ))}
+          </select>
           <button
             onClick={() => copy(multibuy)}
             title="Copy this group as a Multibuy-pasteable item list"
@@ -780,7 +883,9 @@ function GroupSection({ group }: { group: MaterialGroup }) {
             <ClipboardCopy size={13} />
             {copied ? "Copied ✓" : "Copy Multibuy"}
           </button>
-          <SaveAsListButton group={group} />
+          <SaveAsListButton
+            group={{ categoryName: group.categoryName, items: stillNeeded }}
+          />
         </div>
       </div>
       {!collapsed && (
@@ -792,10 +897,16 @@ function GroupSection({ group }: { group: MaterialGroup }) {
             </tr>
           </thead>
           <tbody>
-            {group.items.map((it) => (
+            {items.map((it) => (
               <tr key={it.typeId} className="border-t border-zinc-800/60">
                 <td className="px-3 py-1 text-zinc-200">{it.name}</td>
-                <td className="px-3 py-1 text-right text-zinc-300">
+                <td
+                  className={`px-3 py-1 text-right ${
+                    it.quantity === 0 && locationId !== ""
+                      ? "text-zinc-600"
+                      : "text-zinc-300"
+                  }`}
+                >
                   {formatInt(it.quantity)}
                 </td>
               </tr>
@@ -854,7 +965,7 @@ function SaveAsListButton({ group }: { group: MaterialGroup }) {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && name.trim()) save.mutate(name.trim());
               }}
-              placeholder={`${group.groupName} — ${new Date().toLocaleDateString()}`}
+              placeholder={`${group.categoryName} — ${new Date().toLocaleDateString()}`}
               autoFocus
               className="w-full rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-100 outline-none placeholder:text-zinc-500"
             />
