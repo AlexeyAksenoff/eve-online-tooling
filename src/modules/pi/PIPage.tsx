@@ -264,16 +264,14 @@ function Planner() {
               {chain.data.name}{" "}
               <span className="text-xs text-zinc-500">P{chain.data.tier}</span>
             </div>
-            <PlanetBadges planetTypes={chain.data.planetTypes} />
+            <PlanetBadges
+              planetTypes={chain.data.planetTypes}
+              tier={chain.data.tier}
+            />
           </div>
           <div className="mt-3 space-y-1">
             {chain.data.children.map((c) => (
-              <ChainRow
-                key={c.typeId}
-                node={c}
-                depth={0}
-                rootPlanetTypes={new Set(chain.data!.planetTypes)}
-              />
+              <ChainRow key={c.typeId} node={c} depth={0} />
             ))}
           </div>
         </div>
@@ -282,18 +280,24 @@ function Planner() {
   );
 }
 
-/** `highlight` is the root product's own single-planet-buildable set — when
- * given, each badge colors green if it's also in that set ("this planet type
- * both makes this material *and* can build the whole target alone") or blue
- * otherwise ("makes this material alone; the rest of the chain needs a
- * different/imported input"). Omitted for the root's own badge row, which
- * keeps the single emerald "buildable here" meaning it always had. */
+/** Badge color by PI tier — a quick-scan cue for how deep in the chain a
+ * material sits, independent of which specific planet types it lists (the
+ * tier number itself is already shown as text next to the material's name,
+ * so this is reinforcement, not the only signal, per #848). */
+const TIER_BADGE_CLASS: Record<number, string> = {
+  0: "bg-zinc-800 text-zinc-300",
+  1: "bg-sky-900/40 text-sky-300",
+  2: "bg-emerald-900/40 text-emerald-300",
+  3: "bg-yellow-900/40 text-yellow-300",
+  4: "bg-violet-900/40 text-violet-300",
+};
+
 function PlanetBadges({
   planetTypes,
-  highlight,
+  tier,
 }: {
   planetTypes: string[];
-  highlight?: ReadonlySet<string>;
+  tier: number;
 }) {
   if (planetTypes.length === 0) {
     return (
@@ -302,30 +306,18 @@ function PlanetBadges({
       </span>
     );
   }
+  const className = TIER_BADGE_CLASS[tier] ?? TIER_BADGE_CLASS[0];
   return (
     <div className="flex flex-wrap gap-1">
-      {planetTypes.map((pt) => {
-        const inRoot = highlight === undefined || highlight.has(pt);
-        return (
-          <span
-            key={pt}
-            className={`rounded px-2 py-0.5 text-xs ${
-              inRoot
-                ? "bg-emerald-900/40 text-emerald-300"
-                : "bg-sky-900/40 text-sky-300"
-            }`}
-            title={
-              highlight === undefined
-                ? undefined
-                : inRoot
-                  ? "Also builds the whole target alone"
-                  : "Makes this material alone — the rest of the chain needs a different or imported input"
-            }
-          >
-            {pt}
-          </span>
-        );
-      })}
+      {planetTypes.map((pt) => (
+        <span
+          key={pt}
+          className={`rounded px-2 py-0.5 text-xs ${className}`}
+          title={`P${tier} material`}
+        >
+          {pt}
+        </span>
+      ))}
     </div>
   );
 }
@@ -335,18 +327,8 @@ function PlanetBadges({
  * planner's design in #882. The P0's own `planetTypes` isn't rendered
  * separately — a P1's own set is already its P0 input's set (that's how
  * `intersect_planet_types` computes it bottom-up), so a second badge row
- * would just repeat the one above it. `rootPlanetTypes` is the top-level
- * product's own single-planet set, threaded down so every descendant's
- * badges can be compared against it (#959). */
-function ChainRow({
-  node,
-  depth,
-  rootPlanetTypes,
-}: {
-  node: ChainNode;
-  depth: number;
-  rootPlanetTypes: ReadonlySet<string>;
-}) {
+ * would just repeat the one above it. */
+function ChainRow({ node, depth }: { node: ChainNode; depth: number }) {
   const p0 = node.tier === 1 ? node.children[0] : null;
   return (
     <div>
@@ -363,19 +345,11 @@ function ChainRow({
           </span>
         )}
         {p0 && <span className="text-xs text-zinc-500">← {p0.name} (P0)</span>}
-        <PlanetBadges
-          planetTypes={node.planetTypes}
-          highlight={rootPlanetTypes}
-        />
+        <PlanetBadges planetTypes={node.planetTypes} tier={node.tier} />
       </div>
       {node.tier > 1 &&
         node.children.map((c) => (
-          <ChainRow
-            key={c.typeId}
-            node={c}
-            depth={depth + 1}
-            rootPlanetTypes={rootPlanetTypes}
-          />
+          <ChainRow key={c.typeId} node={c} depth={depth + 1} />
         ))}
     </div>
   );
