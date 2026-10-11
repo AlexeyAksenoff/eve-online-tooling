@@ -128,6 +128,11 @@ pub struct AssetRow {
     /// Character name, or the corporation name for corp-hangar stock.
     pub owner: String,
     pub is_corp: bool,
+    /// The root station/structure id this stack sits at — stable across
+    /// renders (unlike `station`, a resolved display name), so callers can
+    /// key "how much of type X do I have at location Y" lookups on it (e.g.
+    /// Mass Production's "still needed" subtraction).
+    pub location_id: i64,
     /// NPC station name or "Structure {id}" for player structures.
     pub station: String,
     /// Solar system the station sits in, if resolvable from SDE.
@@ -514,6 +519,7 @@ pub async fn assets_load(
             group,
             owner,
             is_corp,
+            location_id: root_loc,
             station,
             solar_system,
         });

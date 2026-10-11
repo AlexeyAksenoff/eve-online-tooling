@@ -232,12 +232,44 @@ describe("FeedbackPage", () => {
     ).toBeDisabled();
   });
 
-  it("flushes anything queued when the page opens", async () => {
+  it("flushes anything queued when the page opens, as a plain read of history", async () => {
+    mockBridge(READY, []);
+    renderPage();
+    // History is a plain read, independent of the retry send — it's no
+    // longer smuggled into the same call (#951 follow-up).
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("feedback_history"),
+    );
+    expect(invokeMock).toHaveBeenCalledWith("feedback_retry_pending");
+  });
+
+  it("sends the retry-pending flush exactly once, not on every re-render (#951)", async () => {
     mockBridge(READY, []);
     renderPage();
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("feedback_retry_pending"),
     );
+    const callsAfterOpen = invokeMock.mock.calls.filter(
+      ([cmd]) => cmd === "feedback_retry_pending",
+    ).length;
+
+    // Trigger several ordinary re-renders (typing, switching kind) — a
+    // `useQuery`-backed retry could re-fire on remount/refocus/staleness;
+    // the mutation-based one must not fire again just because the
+    // component re-rendered.
+    fireEvent.click(screen.getByRole("button", { name: "4 stars" }));
+    fireEvent.click(screen.getByRole("button", { name: /^bug$/i }));
+    fireEvent.change(screen.getByLabelText(/tell us about it/i), {
+      target: { value: "hello" },
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText(/tell us about it/i)).toHaveValue("hello"),
+    );
+
+    expect(
+      invokeMock.mock.calls.filter(([cmd]) => cmd === "feedback_retry_pending")
+        .length,
+    ).toBe(callsAfterOpen);
   });
 
   it("lists past submissions with their delivery state", async () => {

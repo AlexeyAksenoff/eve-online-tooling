@@ -1,9 +1,10 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
   ClipboardCopy,
   FolderOpen,
+  Loader2,
   RotateCcw,
   Save,
   Trash2,
@@ -19,6 +20,7 @@ import {
   shoppingAddItem,
   shoppingCreateList,
   DEFAULT_HYPOTHETICAL_CONFIG,
+  type AssetRow,
   type BlueprintLine,
   type BuildList,
   type HypotheticalConfig,
@@ -27,7 +29,7 @@ import {
   type MaterialGroup,
   type PlanMode,
 } from "../../lib/api";
-import { SHOPPING_LISTS_KEY } from "../../lib/queryKeys";
+import { assetsKeys, SHOPPING_LISTS_KEY } from "../../lib/queryKeys";
 import { formatInt } from "../../lib/format";
 import { useCopyToClipboard } from "../../lib/useCopyToClipboard";
 import { Page, PageHeader } from "../../components/page";
@@ -140,6 +142,29 @@ function Workbench() {
     build.mutate(lines);
   }
 
+  /** Drop one blueprint from the current plan (and its override, if any),
+   *  then recompute with everything else carried forward unchanged — the
+   *  "remove an item from the build list" counterpart to `commitBuildRuns`,
+   *  so a loaded/edited list can be trimmed without going back to the raw
+   *  paste text. */
+  function removeBlueprint(typeId: number) {
+    if (plan == null) return;
+    const nextOverrides = { ...overrides };
+    delete nextOverrides[typeId];
+    setOverrides(nextOverrides);
+
+    const lines: BlueprintLine[] = [
+      ...plan.matchedBlueprints
+        .filter((b) => b.typeId !== typeId)
+        .map((b) => ({
+          name: b.name,
+          buildRuns: nextOverrides[b.typeId] ?? null,
+        })),
+      ...plan.unresolvedNames.map((name) => ({ name })),
+    ];
+    build.mutate(lines);
+  }
+
   /** Load a saved build list: repopulate the paste box for visibility/edit,
    *  restore its saved per-line overrides, and recompute immediately. */
   function loadBuildList(list: BuildList) {
@@ -198,6 +223,7 @@ function Workbench() {
             mode={mode}
             overrides={overrides}
             onCommitBuildRuns={commitBuildRuns}
+            onRemoveBlueprint={removeBlueprint}
           />
         )}
       </div>
@@ -554,18 +580,75 @@ function groupByTier(
     });
 }
 
+/** One station/structure the roster has assets at — the selector's option
+ *  list, derived from a loaded `AssetRow[]` rather than a dedicated
+ *  "locations I have access to" lookup (none exists yet): if the roster has
+ *  stock sitting there, it has hangar access there. */
+interface AssetLocation {
+  id: number;
+  label: string;
+}
+
+function assetLocations(rows: AssetRow[]): AssetLocation[] {
+  const byId = new Map<number, string>();
+  for (const r of rows) byId.set(r.locationId, r.station);
+  return [...byId.entries()]
+    .map(([id, label]) => ({ id, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/** Owned quantity per `typeId:locationId`, summed across every owner
+ *  (personal + corp hangar) — the "still needed" subtraction doesn't care
+ *  which roster member's hangar it's sitting in, only that it's there. */
+function ownedQuantityIndex(rows: AssetRow[]): Map<string, number> {
+  const idx = new Map<string, number>();
+  for (const r of rows) {
+    const key = `${r.typeId}:${r.locationId}`;
+    idx.set(key, (idx.get(key) ?? 0) + r.quantity);
+  }
+  return idx;
+}
+
 function PlanResult({
   plan,
   mode,
   overrides,
   onCommitBuildRuns,
+  onRemoveBlueprint,
 }: {
   plan: MassProductionPlan;
   mode: PlanMode;
   overrides: Record<number, number>;
   onCommitBuildRuns: (typeId: number, value: number | null) => void;
+  onRemoveBlueprint: (typeId: number) => void;
 }) {
   const copiesHeader = mode === "hypothetical" ? "Assumed ME" : "Owned copies";
+
+  // Shares a cache entry with the Assets page (`assetsKeys.load()`): if the
+  // roster's assets were already loaded there this session, the location
+  // picker below sees them immediately with no extra fetch. `enabled:
+  // false` only turns off *this* query's own auto-fetch-on-mount — pulling
+  // the whole roster's ESI assets on every Planner visit would be wasteful
+  // for anyone not using the "still needed" picker — "Load owned stock"
+  // below triggers an explicit `refetch()` for whoever hasn't visited
+  // Assets yet.
+  const assetsQuery = useQuery({ ...assetsKeys.load(), enabled: false });
+  const assetRows = useMemo(
+    () => assetsQuery.data?.rows ?? [],
+    [assetsQuery.data],
+  );
+  const locations = useMemo(() => assetLocations(assetRows), [assetRows]);
+  const ownedIndex = useMemo(() => ownedQuantityIndex(assetRows), [assetRows]);
+
+  // A group's location <select> calls this on focus: if nothing's loaded
+  // yet and there's no fetch already in flight, kick one off silently —
+  // the select stays usable and shows a "Loading…" placeholder while it
+  // resolves, so opening the picker is enough to populate it without a
+  // separate "Load owned stock" click first.
+  const hasAssets = assetsQuery.data != null;
+  const requestAssets = () => {
+    if (!hasAssets && !assetsQuery.isFetching) void assetsQuery.refetch();
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -591,6 +674,7 @@ function PlanResult({
               copiesHeader={copiesHeader}
               overrides={overrides}
               onCommitBuildRuns={onCommitBuildRuns}
+              onRemove={onRemoveBlueprint}
             />
           ))}
         </div>
@@ -604,8 +688,39 @@ function PlanResult({
         </div>
       ) : (
         <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-2 text-xs text-zinc-500">
+            <button
+              onClick={() => void assetsQuery.refetch()}
+              disabled={assetsQuery.isFetching}
+              className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+            >
+              {assetsQuery.isFetching
+                ? "Loading stock…"
+                : assetsQuery.isSuccess
+                  ? "Reload stock"
+                  : "Load owned stock"}
+            </button>
+            {assetsQuery.isSuccess && (
+              <span>
+                Pick a location per group below to subtract what the roster
+                already has there.
+              </span>
+            )}
+            <InlineError
+              message={
+                assetsQuery.isError ? errorMessage(assetsQuery.error) : null
+              }
+            />
+          </div>
           {plan.groups.map((g) => (
-            <GroupSection key={g.groupName} group={g} />
+            <GroupSection
+              key={g.categoryName}
+              group={g}
+              locations={locations}
+              ownedIndex={ownedIndex}
+              assetsFetching={assetsQuery.isFetching}
+              onRequestAssets={requestAssets}
+            />
           ))}
         </div>
       )}
@@ -622,6 +737,7 @@ function TierSection({
   copiesHeader,
   overrides,
   onCommitBuildRuns,
+  onRemove,
 }: {
   tier: string;
   blueprints: MatchedBlueprint[];
@@ -629,6 +745,7 @@ function TierSection({
   copiesHeader: string;
   overrides: Record<number, number>;
   onCommitBuildRuns: (typeId: number, value: number | null) => void;
+  onRemove: (typeId: number) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -651,6 +768,7 @@ function TierSection({
               <th className="px-3 py-1.5 text-left">Blueprint</th>
               <th className="px-3 py-1.5 text-right">{copiesHeader}</th>
               <th className="px-3 py-1.5 text-right">Runs to build</th>
+              <th className="px-3 py-1.5 text-right" />
             </tr>
           </thead>
           <tbody>
@@ -679,6 +797,16 @@ function TierSection({
                     overridden={overrides[b.typeId] != null}
                     onCommit={onCommitBuildRuns}
                   />
+                </td>
+                <td className="px-3 py-1.5 text-right">
+                  <button
+                    onClick={() => onRemove(b.typeId)}
+                    aria-label={`Remove ${b.name}`}
+                    title="Remove this blueprint from the build list"
+                    className="text-zinc-600 hover:text-rose-400"
+                  >
+                    <Trash2 size={13} />
+                  </button>
                 </td>
               </tr>
             ))}
@@ -751,10 +879,34 @@ function BuildRunsCell({
   );
 }
 
-function GroupSection({ group }: { group: MaterialGroup }) {
+function GroupSection({
+  group,
+  locations,
+  ownedIndex,
+  assetsFetching,
+  onRequestAssets,
+}: {
+  group: MaterialGroup;
+  locations: AssetLocation[];
+  ownedIndex: Map<string, number>;
+  assetsFetching: boolean;
+  onRequestAssets: () => void;
+}) {
   const [collapsed, setCollapsed] = useState(false);
+  const [locationId, setLocationId] = useState<number | "">("");
   const { copied, copy } = useCopyToClipboard(1500);
-  const multibuy = group.items
+
+  // Blank location (default): the full needed quantity, unchanged. A picked
+  // location subtracts what the roster already has stocked there, so the
+  // table and the Multibuy/save actions below only reflect what's still
+  // actually needed.
+  const items = group.items.map((it) => {
+    if (locationId === "") return it;
+    const owned = ownedIndex.get(`${it.typeId}:${locationId}`) ?? 0;
+    return { ...it, quantity: Math.max(0, it.quantity - owned) };
+  });
+  const stillNeeded = items.filter((it) => it.quantity > 0);
+  const multibuy = stillNeeded
     .map((i) => `${i.name}\t${i.quantity}`)
     .join("\n");
 
@@ -766,12 +918,41 @@ function GroupSection({ group }: { group: MaterialGroup }) {
           className="flex items-center gap-2 text-left text-sm font-medium text-zinc-200"
         >
           <span className="text-zinc-500">{collapsed ? "▸" : "▾"}</span>
-          {group.groupName}
+          {group.categoryName}
           <span className="text-xs font-normal text-zinc-500">
-            ({group.categoryName} · {group.items.length} items)
+            ({group.items.length} item{group.items.length === 1 ? "" : "s"})
           </span>
         </button>
         <div className="flex items-center gap-2">
+          <select
+            value={locationId}
+            onChange={(e) =>
+              setLocationId(
+                e.currentTarget.value ? Number(e.currentTarget.value) : "",
+              )
+            }
+            onFocus={onRequestAssets}
+            title="Subtract what the roster already has stocked at a location"
+            className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 outline-none"
+          >
+            <option value="">
+              {assetsFetching && locations.length === 0
+                ? "Loading stock…"
+                : "All locations — full quantity"}
+            </option>
+            {locations.map((loc) => (
+              <option key={loc.id} value={loc.id}>
+                {loc.label}
+              </option>
+            ))}
+          </select>
+          {assetsFetching && (
+            <Loader2
+              size={13}
+              className="animate-spin text-zinc-500"
+              aria-label="Loading stock…"
+            />
+          )}
           <button
             onClick={() => copy(multibuy)}
             title="Copy this group as a Multibuy-pasteable item list"
@@ -780,7 +961,9 @@ function GroupSection({ group }: { group: MaterialGroup }) {
             <ClipboardCopy size={13} />
             {copied ? "Copied ✓" : "Copy Multibuy"}
           </button>
-          <SaveAsListButton group={group} />
+          <SaveAsListButton
+            group={{ categoryName: group.categoryName, items: stillNeeded }}
+          />
         </div>
       </div>
       {!collapsed && (
@@ -792,10 +975,16 @@ function GroupSection({ group }: { group: MaterialGroup }) {
             </tr>
           </thead>
           <tbody>
-            {group.items.map((it) => (
+            {items.map((it) => (
               <tr key={it.typeId} className="border-t border-zinc-800/60">
                 <td className="px-3 py-1 text-zinc-200">{it.name}</td>
-                <td className="px-3 py-1 text-right text-zinc-300">
+                <td
+                  className={`px-3 py-1 text-right ${
+                    it.quantity === 0 && locationId !== ""
+                      ? "text-zinc-600"
+                      : "text-zinc-300"
+                  }`}
+                >
                   {formatInt(it.quantity)}
                 </td>
               </tr>
@@ -854,7 +1043,7 @@ function SaveAsListButton({ group }: { group: MaterialGroup }) {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && name.trim()) save.mutate(name.trim());
               }}
-              placeholder={`${group.groupName} — ${new Date().toLocaleDateString()}`}
+              placeholder={`${group.categoryName} — ${new Date().toLocaleDateString()}`}
               autoFocus
               className="w-full rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-100 outline-none placeholder:text-zinc-500"
             />

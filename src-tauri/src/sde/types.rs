@@ -159,6 +159,31 @@ pub struct ManufacturableBlueprint {
     pub product_quantity: i64,
 }
 
+/// One small turret charge's raw SDE attributes, before the tier (T1/Navy/
+/// T2) and turret-class classification `modules::ammo` derives from
+/// `meta_group_id`/`name`/`group_name` — see `Sde::ammo_charges`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AmmoChargeAttrs {
+    pub type_id: i64,
+    pub name: String,
+    pub group_name: String,
+    /// `None` = Tech I (no `invMetaTypes` row — the common case); `Some(1)`
+    /// is also Tech I (rare explicit row); `Some(2)` = Tech II; `Some(4)` =
+    /// Faction (covers both navy and pirate factions — narrowed to
+    /// navy-only by name prefix in `modules::ammo`).
+    pub meta_group_id: Option<i64>,
+    pub em: f64,
+    pub explosive: f64,
+    pub kinetic: f64,
+    pub thermal: f64,
+    pub optimal_mult: f64,
+    pub falloff_mult: f64,
+    pub tracking_mult: f64,
+    /// `capNeedBonus` (317) as a percent (`25.0` = +25% cap use per shot),
+    /// `0.0` when the charge carries no cap-need attribute at all.
+    pub cap_need_bonus_pct: f64,
+}
+
 /// One wormhole type (`invTypes` group 988) with its physics, read from the SDE
 /// dogma attributes — the offline "whtype.info" view. `dest_class_id` is 0 for
 /// K162 (the generic exit signature, whose target class isn't fixed).

@@ -214,6 +214,13 @@ export const MODULE_METADATA: ModuleMeta[] = [
     group: "intel",
   },
   {
+    id: "ammo",
+    title: "Ammo",
+    description:
+      "Reference: small turret charges — damage, range and tracking multipliers.",
+    group: "intel",
+  },
+  {
     id: "fitting",
     title: "Fitting",
     description: "Build ship fits and validate slots, resources and price.",

@@ -4,6 +4,7 @@ import type { MassProductionPlan } from "../../lib/api";
 import { invokeMock, mockInvoke, renderWithQuery } from "../../test/harness";
 
 import { MassProductionPage } from "./MassProductionPage";
+import { AssetsPage } from "../assets/AssetsPage";
 
 const SDE_OK = { installed: true, path: "/sde", sizeBytes: 1, updated: false };
 
@@ -21,8 +22,7 @@ const PLAN: MassProductionPlan = {
   ],
   groups: [
     {
-      groupName: "Mineral",
-      categoryName: "Material",
+      categoryName: "Mineral",
       items: [{ typeId: 11399, name: "Morphite", quantity: 5010 }],
     },
   ],
@@ -42,8 +42,7 @@ const HYPOTHETICAL_PLAN: MassProductionPlan = {
   ],
   groups: [
     {
-      groupName: "Mineral",
-      categoryName: "Material",
+      categoryName: "Mineral",
       items: [{ typeId: 34, name: "Tritanium", quantity: 100 }],
     },
   ],
@@ -63,8 +62,7 @@ const MWD_PLAN: MassProductionPlan = {
   ],
   groups: [
     {
-      groupName: "Mineral",
-      categoryName: "Material",
+      categoryName: "Mineral",
       items: [{ typeId: 11399, name: "Morphite", quantity: 5010 }],
     },
   ],
@@ -180,6 +178,180 @@ describe("MassProductionPage", () => {
     expect(await screen.findByText("Saved ✓")).toBeInTheDocument();
   });
 
+  it("subtracts owned stock at a picked location, showing only what's still needed", async () => {
+    mockInvoke({
+      sde_status: () => SDE_OK,
+      massprod_plan: () => PLAN,
+      assets_load: () => ({
+        rows: [
+          {
+            typeId: 11399,
+            name: "Morphite",
+            quantity: 5000,
+            sellPrice: 1000,
+            buyPrice: 900,
+            sellValue: 5_000_000,
+            buyValue: 4_500_000,
+            volume: 5000,
+            category: "Material",
+            group: "Mineral",
+            owner: "Alt One",
+            isCorp: false,
+            locationId: 60003760,
+            station: "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
+            solarSystem: "Jita",
+          },
+        ],
+        roots: [],
+        sellTotal: 5_000_000,
+        buyTotal: 4_500_000,
+        volumeTotal: 5000,
+      }),
+    });
+    renderWithQuery(<MassProductionPage />);
+
+    await pasteAndImport("5MN Microwarpdrive II Blueprint");
+    await screen.findByText("Mineral");
+    expect(screen.getByText("5,010")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Load owned stock" }));
+    await screen.findByRole("button", { name: "Reload stock" });
+
+    fireEvent.change(
+      screen.getByTitle(
+        "Subtract what the roster already has stocked at a location",
+      ),
+      {
+        target: {
+          value: "60003760",
+        },
+      },
+    );
+
+    expect(await screen.findByText("10")).toBeInTheDocument();
+    expect(screen.queryByText("5,010")).not.toBeInTheDocument();
+  });
+
+  it("loads stock in the background with a wait signal when the location picker is focused", async () => {
+    const { promise: assetsPromise, resolve: resolveAssets } =
+      Promise.withResolvers<unknown>();
+    mockInvoke({
+      sde_status: () => SDE_OK,
+      massprod_plan: () => PLAN,
+      assets_load: () => assetsPromise,
+    });
+    renderWithQuery(<MassProductionPage />);
+
+    await pasteAndImport("5MN Microwarpdrive II Blueprint");
+    await screen.findByText("Mineral");
+
+    const select = screen.getByTitle(
+      "Subtract what the roster already has stocked at a location",
+    ) as HTMLSelectElement;
+    expect(invokeMock).not.toHaveBeenCalledWith("assets_load");
+
+    fireEvent.focus(select);
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("assets_load"));
+    expect(select.options[0].textContent).toBe("Loading stock…");
+    expect(
+      screen.getByRole("button", { name: "Loading stock…" }),
+    ).toBeInTheDocument();
+
+    resolveAssets({
+      rows: [
+        {
+          typeId: 11399,
+          name: "Morphite",
+          quantity: 5000,
+          sellPrice: 1000,
+          buyPrice: 900,
+          sellValue: 5_000_000,
+          buyValue: 4_500_000,
+          volume: 5000,
+          category: "Material",
+          group: "Mineral",
+          owner: "Alt One",
+          isCorp: false,
+          locationId: 60003760,
+          station: "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
+          solarSystem: "Jita",
+        },
+      ],
+      roots: [],
+      sellTotal: 5_000_000,
+      buyTotal: 4_500_000,
+      volumeTotal: 5000,
+    });
+
+    await screen.findByRole("option", {
+      name: "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
+    });
+    expect(select.options[0].textContent).toBe("All locations — full quantity");
+    expect(
+      screen.queryByRole("button", { name: "Loading stock…" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("sees locations the Assets page already loaded, without a separate fetch", async () => {
+    mockInvoke({
+      sde_status: () => SDE_OK,
+      massprod_plan: () => PLAN,
+      auth_characters: () => [],
+      auth_active_character: () => null,
+      assets_load: () => ({
+        rows: [
+          {
+            typeId: 11399,
+            name: "Morphite",
+            quantity: 5000,
+            sellPrice: 1000,
+            buyPrice: 900,
+            sellValue: 5_000_000,
+            buyValue: 4_500_000,
+            volume: 5000,
+            category: "Material",
+            group: "Mineral",
+            owner: "Alt One",
+            isCorp: false,
+            locationId: 60003760,
+            station: "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
+            solarSystem: "Jita",
+          },
+        ],
+        roots: [],
+        sellTotal: 5_000_000,
+        buyTotal: 4_500_000,
+        volumeTotal: 5000,
+      }),
+    });
+    renderWithQuery(
+      <>
+        <AssetsPage />
+        <MassProductionPage />
+      </>,
+    );
+
+    // The Assets page auto-loads on mount (no click needed there either) —
+    // wait for its own "Refresh" button to confirm the shared query landed.
+    await screen.findByRole("button", { name: "Refresh" });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("assets_load"));
+
+    await pasteAndImport("5MN Microwarpdrive II Blueprint");
+    await screen.findByText("Mineral");
+
+    // Never clicked "Load owned stock" here — the picker is already
+    // populated from the Assets page's load, sharing one cache entry.
+    fireEvent.change(
+      screen.getByTitle(
+        "Subtract what the roster already has stocked at a location",
+      ),
+      { target: { value: "60003760" } },
+    );
+
+    expect(await screen.findByText("10")).toBeInTheDocument();
+  });
+
   it("groups the matched blueprints by tech tier", async () => {
     const TIERED_PLAN: MassProductionPlan = {
       unresolvedNames: [],
@@ -247,6 +419,60 @@ describe("MassProductionPage", () => {
     expect(await screen.findByLabelText("Runs to build of 1073")).toHaveValue(
       50,
     );
+  });
+
+  it("removes a blueprint from the build list and recomputes without it", async () => {
+    const TWO_BLUEPRINT_PLAN: MassProductionPlan = {
+      unresolvedNames: [],
+      matchedBlueprints: [
+        {
+          name: "Widget I Blueprint",
+          typeId: 998,
+          ownedCopies: 5,
+          totalRuns: 5,
+          assumed: null,
+          tier: "Tech I",
+        },
+        MWD_PLAN.matchedBlueprints[0],
+      ],
+      groups: [],
+    };
+    const AFTER_REMOVE_PLAN: MassProductionPlan = {
+      ...MWD_PLAN,
+      matchedBlueprints: [MWD_PLAN.matchedBlueprints[0]],
+    };
+    mockInvoke({
+      sde_status: () => SDE_OK,
+      massprod_plan: (args) => {
+        const { lines } = args as { lines: { name: string }[] };
+        return lines.some((l) => l.name === "Widget I Blueprint")
+          ? TWO_BLUEPRINT_PLAN
+          : AFTER_REMOVE_PLAN;
+      },
+    });
+    renderWithQuery(<MassProductionPage />);
+
+    await pasteAndImport("Widget I Blueprint\n5MN Microwarpdrive II Blueprint");
+    await screen.findByText("Widget I Blueprint");
+    expect(
+      screen.getByText("5MN Microwarpdrive II Blueprint"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove Widget I Blueprint" }),
+    );
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("massprod_plan", {
+        lines: [{ name: "5MN Microwarpdrive II Blueprint", buildRuns: null }],
+        mode: "owned",
+        hypotheticalConfig: { t1Runs: 1, t1Me: 10, t2Me: 2 },
+      }),
+    );
+    expect(screen.queryByText("Widget I Blueprint")).not.toBeInTheDocument();
+    expect(
+      await screen.findByText("5MN Microwarpdrive II Blueprint"),
+    ).toBeInTheDocument();
   });
 
   it("saves, loads, and deletes a build list", async () => {

@@ -7,6 +7,7 @@ use std::path::Path;
 use super::types::{ItemMeta, TypeDetail, TypeInfo, TypeNameMap};
 use super::SdeError;
 
+mod ammo;
 mod dogma;
 mod industry;
 mod map;

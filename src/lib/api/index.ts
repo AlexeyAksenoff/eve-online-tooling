@@ -36,3 +36,4 @@ export * from "./info";
 export * from "./feedback";
 export * from "./logs";
 export * from "./zkill";
+export * from "./ammo";

@@ -41,4 +41,8 @@ export const STORAGE_KEYS = {
   supportSeen: "support.firstRunSeen",
   // Settings: check for a newer release on startup (default on, opt-out)
   checkForUpdates: "settings.checkForUpdates",
+  // Settings: confirm before quitting the app (default on, opt-out)
+  confirmBeforeQuit: "settings.confirmBeforeQuit",
+  // PI Planner: the commodities currently being planned, kept across visits
+  piPlannerPicks: "pi.plannerPicks",
 } as const;

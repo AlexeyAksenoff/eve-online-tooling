@@ -47,6 +47,16 @@ const MAX_PER_DAY: usize = 20;
 /// for the user (the real copy is server-side), so the list is bounded.
 const HISTORY_CAP: usize = 200;
 
+/// Most pending entries retried in one visit (#951). Every queued send
+/// retries on each page open; without a cap, an install that's been offline
+/// for a while (or whose Firestore writes are being rejected/timing out)
+/// would make *every single visit* retry its whole backlog, and the page
+/// stayed unresponsive-feeling until it finished. Oldest-first within the
+/// cap — the longest-stuck entries get priority — and delivered
+/// concurrently so N queued entries cost roughly one request timeout of
+/// wall time, not N of them back to back.
+const MAX_RETRIES_PER_VISIT: usize = 20;
+
 // --- Types ------------------------------------------------------------------
 
 /// What sort of feedback this is. Mirrored by the `kind in [...]` check in
@@ -390,19 +400,39 @@ pub fn feedback_history(app: AppHandle) -> Result<Vec<FeedbackEntry>, AppError> 
     Ok(store.entries)
 }
 
-/// Re-attempt every queued submission (called when the page opens). Returns the
-/// updated history.
+/// Indices of the pending entries to retry this visit, oldest-first and
+/// capped at [`MAX_RETRIES_PER_VISIT`] — pure, so the selection/priority
+/// order is unit-testable without a configured Firebase endpoint.
+fn select_retries(entries: &[FeedbackEntry]) -> Vec<usize> {
+    let mut pending: Vec<usize> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.status == EntryStatus::Pending)
+        .map(|(i, _)| i)
+        .collect();
+    pending.sort_by_key(|&i| entries[i].submitted_at);
+    pending.truncate(MAX_RETRIES_PER_VISIT);
+    pending
+}
+
+/// Re-attempt queued submissions (called when the page opens), capped and
+/// concurrent — see [`MAX_RETRIES_PER_VISIT`]. Returns the updated history.
 #[tauri::command]
 pub async fn feedback_retry_pending(app: AppHandle) -> Result<Vec<FeedbackEntry>, AppError> {
     let (dir, mut store) = load_store(&app)?;
     if !firebase::is_configured() {
         return Ok(store.entries);
     }
-    for entry in store.entries.iter_mut() {
-        if entry.status == EntryStatus::Pending {
-            deliver(entry).await;
-        }
-    }
+    let retry: std::collections::HashSet<usize> =
+        select_retries(&store.entries).into_iter().collect();
+    let to_deliver: Vec<&mut FeedbackEntry> = store
+        .entries
+        .iter_mut()
+        .enumerate()
+        .filter(|(i, _)| retry.contains(i))
+        .map(|(_, e)| e)
+        .collect();
+    futures_util::future::join_all(to_deliver.into_iter().map(deliver)).await;
     save_store(&dir, &mut store)?;
     Ok(store.entries)
 }
@@ -566,6 +596,37 @@ mod tests {
         assert_eq!(store.entries.len(), HISTORY_CAP);
         assert!(store.entries[0].submitted_at > store.entries[1].submitted_at);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn retries_are_capped_and_prioritize_the_oldest_stuck_entries() {
+        // #951: a backlog bigger than the cap must not grow the retry cost
+        // per visit — only the oldest MAX_RETRIES_PER_VISIT get picked,
+        // regardless of their position in the stored array.
+        let mut entries: Vec<FeedbackEntry> = (0..MAX_RETRIES_PER_VISIT as i64 + 5)
+            .map(entry_at)
+            .collect();
+        for e in &mut entries {
+            e.status = EntryStatus::Pending;
+        }
+        entries.reverse(); // position no longer matches submission order
+        let selected = select_retries(&entries);
+        assert_eq!(selected.len(), MAX_RETRIES_PER_VISIT);
+        let times: Vec<i64> = selected.iter().map(|&i| entries[i].submitted_at).collect();
+        // The oldest MAX_RETRIES_PER_VISIT timestamps (0..MAX) were chosen,
+        // not the newest ones (5..MAX+5) that happen to sit first in the
+        // reversed array.
+        assert_eq!(
+            *times.iter().max().unwrap(),
+            MAX_RETRIES_PER_VISIT as i64 - 1
+        );
+    }
+
+    #[test]
+    fn only_pending_entries_are_selected_for_retry() {
+        let mut entries = vec![entry_at(1), entry_at(2), entry_at(3)];
+        entries[1].status = EntryStatus::Pending;
+        assert_eq!(select_retries(&entries), vec![1]);
     }
 
     /// A throwaway app-data dir holding `roster` as the logged-in characters.

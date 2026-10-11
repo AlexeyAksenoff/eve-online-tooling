@@ -403,6 +403,46 @@ describe("FW VP change columns (Δ30m / Δ login)", () => {
       within(row).getByTitle(/since you opened this session/).textContent,
     ).toBe("0.0%");
   });
+
+  it("signs the Trend arrow for the selected militia too (#950) — an enemy's fast loss reads as your fast gain", async () => {
+    const nodes = [
+      // Amarr-occupied, Amarr's own VP climbing fast (good for Amarr, bad
+      // for Minmatar) — raw tier would be fast-up (↑↑), signed should read
+      // as a plain down (↓) for Minmatar (the tier system only has a
+      // "fast" variant on the up side, by design).
+      {
+        ...node("AmarrClimbing", "contested", 13, 500003, "Amarr"),
+        vpVelocity: 0.15,
+      },
+      // Amarr-occupied, Amarr's own VP falling fast (bad for Amarr, good
+      // for Minmatar) — raw tier would be "down", signed should read as a
+      // fast gain (↑↑) for Minmatar, matching a positive Δ30m on the same
+      // row rather than contradicting it with a down arrow.
+      {
+        ...node("AmarrFalling", "contested", 14, 500003, "Amarr"),
+        vpVelocity: -0.15,
+      },
+    ];
+    mockInvoke({
+      intel_fw_stats: () => [],
+      intel_fw_systems: () => ({ nodes, edges: [] }),
+      auth_characters: () => [],
+      auth_active_character: () => null,
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(inTable().getByText("AmarrClimbing")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Minmatar Republic" }));
+
+    await waitFor(() => {
+      const climbingRow = inTable().getByText("AmarrClimbing").closest("tr")!;
+      expect(within(climbingRow).getByText("↓")).toBeInTheDocument();
+    });
+    const fallingRow = inTable().getByText("AmarrFalling").closest("tr")!;
+    expect(within(fallingRow).getByText("↑↑")).toBeInTheDocument();
+  });
 });
 
 describe("FW battlefield classification", () => {

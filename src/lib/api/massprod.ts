@@ -72,11 +72,11 @@ export interface PlanItem {
   quantity: number;
 }
 
-/** Aggregated materials for one `invGroups.groupName` bucket (e.g.
- * "Mineral", "Refined Commodities - Tier 2"). */
+/** Aggregated materials for one `invCategories.categoryName` bucket (e.g.
+ * "Ship Equipment", "Ammunition & Charges") — coarse on purpose: the finer
+ * `invGroups.groupName` used to split every T1 module subtype into its own
+ * tiny section. */
 export interface MaterialGroup {
-  groupName: string;
-  /** The group's parent `invCategories.categoryName`, for a secondary label. */
   categoryName: string;
   items: PlanItem[];
 }
