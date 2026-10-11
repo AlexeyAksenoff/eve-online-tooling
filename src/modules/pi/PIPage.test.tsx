@@ -341,7 +341,9 @@ describe("PIPage Planner tab", () => {
     // Root badge: Plasma-only, single-planet (several rows also badge
     // "Plasma" since every node in this fixture includes it — scope to the
     // header row specifically).
-    const header = (await screen.findByText("Robotics")).parentElement!;
+    const header = (await screen.findByDisplayValue("Robotics")).closest(
+      ".pr-6",
+    ) as HTMLElement;
     expect(within(header).getByText("Plasma")).toBeInTheDocument();
     // Nested P2 row, and its P1 child inlining the P0 dependency instead of
     // a separate bullet.
@@ -398,7 +400,9 @@ describe("PIPage Planner tab", () => {
     fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
 
     // Root (Robotics) is P3 → yellow.
-    const rootRow = (await screen.findByText("Robotics")).parentElement!;
+    const rootRow = (await screen.findByDisplayValue("Robotics")).closest(
+      ".pr-6",
+    ) as HTMLElement;
     expect(within(rootRow).getByText("Plasma").className).toContain(
       "bg-yellow-900/40",
     );
@@ -767,6 +771,83 @@ describe("PIPage Planner tab", () => {
     fireEvent.change(planetSelect, { target: { value: "40009082" } });
 
     expect((planetSelect as HTMLSelectElement).value).toBe("40009082");
+  });
+
+  it("auto-names a pick from System · Planet · Product once assigned, and lets it be overridden", async () => {
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [],
+      pi_locked_get: () => [],
+      sde_search_pi_commodities: () => [{ id: 9848, name: "Robotics" }],
+      pi_production_chain: () => ROBOTICS_CHAIN,
+      route_system_search: () => [{ id: 30000142, name: "Jita" }],
+      pi_planets_in_system: () => [
+        { id: 40009082, name: "Jita IV", planetType: "Gas" },
+      ],
+      pi_planner_setup_save: () => ({
+        id: "jita-robotics",
+        name: "Jita Robotics",
+        items: [],
+      }),
+    });
+    renderWithQuery(<PIPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Planner" }));
+    fireEvent.change(screen.getByPlaceholderText(/search a p1-p4 commodity/i), {
+      target: { value: "robo" },
+    });
+    fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
+
+    // Before any system/planet is picked, the name is just the product.
+    expect(await screen.findByDisplayValue("Robotics")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Solar system…"), {
+      target: { value: "jita" },
+    });
+    fireEvent.click(await screen.findByText("Jita", {}, { timeout: 2000 }));
+    const planetSelect = await screen.findByLabelText("Planet");
+    await screen.findByRole("option", { name: "Jita IV (Gas)" });
+    fireEvent.change(planetSelect, { target: { value: "40009082" } });
+
+    // Once System + Planet are both set, the name auto-updates to the
+    // "System · Planet · Product" default.
+    const nameInput = await screen.findByDisplayValue(
+      "Jita · Jita IV · Robotics",
+    );
+
+    // Still freely editable — typing over it stores a real override.
+    fireEvent.change(nameInput, { target: { value: "Main Robotics line" } });
+    fireEvent.blur(nameInput);
+
+    expect(
+      await screen.findByDisplayValue("Main Robotics line"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByDisplayValue("Jita · Jita IV · Robotics"),
+    ).not.toBeInTheDocument();
+
+    // The custom name survives into a saved setup's payload.
+    fireEvent.click(screen.getByRole("button", { name: /save setup/i }));
+    fireEvent.change(screen.getByPlaceholderText(/^setup — /i), {
+      target: { value: "Jita Robotics" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "pi_planner_setup_save",
+        expect.objectContaining({
+          name: "Jita Robotics",
+          items: expect.arrayContaining([
+            expect.objectContaining({
+              typeId: 9848,
+              label: "Main Robotics line",
+            }),
+          ]),
+        }),
+      ),
+    );
   });
 
   it("saves the current picks as a named setup", async () => {

@@ -176,6 +176,10 @@ export interface PlannerSetupItem {
    *  marked "produced on another planned colony, ship it in instead" —
    *  matched against another item's `typeId` in the same setup. */
   imports: number[];
+  /** A user-chosen display name, overriding the default "System · Planet ·
+   *  Product" label — `null` means "still using the auto-derived default",
+   *  not "no name". */
+  label: string | null;
 }
 
 /** A named, reusable Planner setup — the picked commodities (with notes and
@@ -203,6 +207,7 @@ export function piPlannerSetupSave(
     planetId?: number | null;
     planetName?: string | null;
     imports?: number[];
+    label?: string | null;
   }[],
 ): Promise<PlannerSetup> {
   return invoke<PlannerSetup>("pi_planner_setup_save", { name, items });

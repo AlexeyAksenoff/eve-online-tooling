@@ -262,6 +262,20 @@ interface PlannerPick {
    *  the consuming side (the chain node for the imported material), not
    *  the producing pick. */
   imports: number[];
+  /** A user-chosen display name, overriding the default "System · Planet ·
+   *  Product" label below — `null` means "still using the auto-derived
+   *  default", not "no name". */
+  label: string | null;
+}
+
+/** Display label for a pick — the user's own override if set, else a live
+ *  "System · Planet · Product" default built from whatever's picked so far
+ *  (just the product name if neither system nor planet is assigned yet).
+ *  Used both on the pick's own card and whenever another pick refers to it
+ *  (an "Import from …" / "Exported to …" hint). */
+function pickLabel(p: PlannerPick): string {
+  const auto = [p.systemName, p.planetName, p.name].filter(Boolean).join(" · ");
+  return p.label ?? auto;
 }
 
 function Planner() {
@@ -300,6 +314,7 @@ function Planner() {
           planetId: null,
           planetName: null,
           imports: [],
+          label: null,
         },
       ]);
     }
@@ -329,6 +344,7 @@ function Planner() {
         planetId: i.planetId,
         planetName: i.planetName,
         imports: i.imports,
+        label: i.label,
       })),
     );
   }
@@ -406,6 +422,9 @@ function PlanCard({
 }) {
   // null = not editing → show the saved notes.
   const [notesDraft, setNotesDraft] = useState<string | null>(null);
+  // null = not editing → show pickLabel(pick) (the override, or the live
+  // auto-derived "System · Planet · Product" default).
+  const [labelDraft, setLabelDraft] = useState<string | null>(null);
   const planets = useQuery({
     queryKey: ["pi", "planets-in-system", pick.systemId],
     queryFn: () => piPlanetsInSystem(pick.systemId!),
@@ -417,6 +436,16 @@ function PlanCard({
     const next = notesDraft;
     setNotesDraft(null);
     if (next !== pick.notes) onUpdate({ notes: next });
+  }
+
+  function commitLabel() {
+    if (labelDraft === null) return;
+    const next = labelDraft.trim();
+    setLabelDraft(null);
+    if (next === pickLabel(pick)) return;
+    // Blank clears the override, reverting to the live auto-derived
+    // default instead of storing an empty string as a "name".
+    onUpdate({ label: next || null });
   }
 
   /** Toggle "this material in my own chain is imported from another
@@ -447,9 +476,23 @@ function PlanCard({
       {chain.data && (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3 pr-6">
-            <div className="text-lg font-medium text-zinc-100">
-              {chain.data.name}{" "}
-              <span className="text-xs text-zinc-500">P{chain.data.tier}</span>
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <input
+                type="text"
+                value={labelDraft ?? pickLabel(pick)}
+                onChange={(e) => setLabelDraft(e.currentTarget.value)}
+                onBlur={commitLabel}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setLabelDraft(null);
+                  if (e.key === "Enter") e.currentTarget.blur();
+                }}
+                aria-label={`Name for ${pick.name}`}
+                title="Editable — defaults to System · Planet · Product once picked"
+                className="min-w-0 rounded border border-transparent bg-transparent px-0 text-lg font-medium text-zinc-100 outline-none hover:border-zinc-700 focus:border-zinc-500"
+              />
+              <span className="text-xs text-zinc-500">
+                {chain.data.name} · P{chain.data.tier}
+              </span>
             </div>
             <PlanetBadges
               planetTypes={chain.data.planetTypes}
@@ -464,7 +507,7 @@ function PlanCard({
               exportedTo.length > 0 && (
                 <div className="mt-1 text-xs text-indigo-400">
                   ↳ Exported to:{" "}
-                  {exportedTo.map((o) => o.planetName ?? o.name).join(", ")}
+                  {exportedTo.map((o) => pickLabel(o)).join(", ")}
                 </div>
               )
             );
@@ -583,6 +626,7 @@ function SetupsPanel({
           planetId: p.planetId,
           planetName: p.planetName,
           imports: p.imports,
+          label: p.label,
         })),
       ),
     onSuccess: () => {
@@ -814,7 +858,7 @@ function ChainRow({
         {isImported ? (
           <span className="rounded bg-indigo-950/60 px-2 py-0.5 text-xs text-indigo-300">
             Imported
-            {source ? ` from ${source.planetName ?? source.name}` : ""}
+            {source ? ` from ${pickLabel(source)}` : ""}
           </span>
         ) : (
           <>
@@ -831,7 +875,7 @@ function ChainRow({
             title={
               isImported
                 ? "Stop treating this as imported — build it in this chain again"
-                : `Mark as imported from ${source?.name ?? ""} instead of building it here`
+                : `Mark as imported from ${source ? pickLabel(source) : ""} instead of building it here`
             }
             className={`rounded border px-1.5 py-0.5 text-[11px] ${
               isImported
@@ -839,7 +883,9 @@ function ChainRow({
                 : "border-zinc-700 text-zinc-400 hover:bg-zinc-800"
             }`}
           >
-            {isImported ? "✓ Linked" : `⇄ Import from ${source?.name}`}
+            {isImported
+              ? "✓ Linked"
+              : `⇄ Import from ${source ? pickLabel(source) : ""}`}
           </button>
         )}
       </div>
