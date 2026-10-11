@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 use crate::esi::{authed_get, AuthState};
-use crate::model::{id_names, IdName};
 use crate::sde::{PlanetSchematic, Sde};
 use crate::storage;
 
@@ -702,16 +701,37 @@ pub fn pi_production_chain(
     production_chain(&sde, type_id).map_err(|e| e.to_string().into())
 }
 
-/// A solar system's planets, for the Planner's "where are you building this"
-/// picker (#965) — paired with a system search (e.g. the Route module's
-/// `route_system_search`) in a system-then-planet flow on the frontend.
+/// One planet in a solar system, for the Planner's "where are you building
+/// this" picker (#965, #966).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanetOption {
+    pub id: i64,
+    pub name: String,
+    /// The planet's own type (e.g. "Barren", "Gas"), same vocabulary as
+    /// `ChainNode.planetTypes` — shown right in the picker so the user can
+    /// match it against the chain's planet-type badges without leaving the
+    /// dropdown.
+    pub planet_type: String,
+}
+
+/// A solar system's planets — paired with a system search (e.g. the Route
+/// module's `route_system_search`) in a system-then-planet flow on the
+/// frontend.
 #[tauri::command]
-pub fn pi_planets_in_system(app: AppHandle, system_id: i64) -> Result<Vec<IdName>, String> {
+pub fn pi_planets_in_system(app: AppHandle, system_id: i64) -> Result<Vec<PlanetOption>, String> {
     let sde = crate::sde::open_from_app(&app)?;
-    let pairs = sde
+    let rows = sde
         .planets_in_system(system_id)
         .map_err(|e| e.to_string())?;
-    Ok(id_names(pairs))
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, planet_type)| PlanetOption {
+            id,
+            name,
+            planet_type,
+        })
+        .collect())
 }
 
 #[cfg(test)]

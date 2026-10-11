@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { IdName } from "./common";
 
 // --- Planetary Interaction ---
 
@@ -139,14 +138,26 @@ export function piProductionChain(typeId: number): Promise<ChainNode> {
   return invoke<ChainNode>("pi_production_chain", { typeId });
 }
 
+/** One planet in a solar system, for the Planner's "where are you building
+ * this" picker. */
+export interface PlanetOption {
+  id: number;
+  name: string;
+  /** The planet's own type (e.g. "Barren", "Gas"), same vocabulary as
+   *  `ChainNode.planetTypes` — shown right in the picker so it can be
+   *  matched against the chain's planet-type badges without leaving the
+   *  dropdown. */
+  planetType: string;
+}
+
 /**
  * A solar system's planets, for the Planner's "where are you building
  * this" picker — call once a system is chosen (via `systemSearch`), then
  * present the result as a small fixed list (a system has at most ~8
  * planets, no search needed).
  */
-export function piPlanetsInSystem(systemId: number): Promise<IdName[]> {
-  return invoke<IdName[]>("pi_planets_in_system", { systemId });
+export function piPlanetsInSystem(systemId: number): Promise<PlanetOption[]> {
+  return invoke<PlanetOption[]>("pi_planets_in_system", { systemId });
 }
 
 // --- Planner setups (#965) ---

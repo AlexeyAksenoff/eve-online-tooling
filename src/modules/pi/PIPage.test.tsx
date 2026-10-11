@@ -582,8 +582,8 @@ describe("PIPage Planner tab", () => {
       pi_production_chain: () => ROBOTICS_CHAIN,
       route_system_search: () => [{ id: 30000142, name: "Jita" }],
       pi_planets_in_system: () => [
-        { id: 40009077, name: "Jita I" },
-        { id: 40009082, name: "Jita IV" },
+        { id: 40009077, name: "Jita I", planetType: "Barren" },
+        { id: 40009082, name: "Jita IV", planetType: "Gas" },
       ],
     });
     renderWithQuery(<PIPage />);
@@ -606,6 +606,11 @@ describe("PIPage Planner tab", () => {
         systemId: 30000142,
       }),
     );
+    // Each option shows the planet's own type alongside its name.
+    expect(
+      await screen.findByRole("option", { name: "Jita IV (Gas)" }),
+    ).toBeInTheDocument();
+
     fireEvent.change(planetSelect, { target: { value: "40009082" } });
 
     expect((planetSelect as HTMLSelectElement).value).toBe("40009082");
