@@ -455,14 +455,14 @@ function PlanCard({
                       planets.data?.find((pl) => pl.id === id)?.name ?? null;
                     onUpdate({ planetId: id, planetName: name });
                   }}
-                  className="w-32 rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
+                  className="w-48 rounded bg-zinc-800 px-2 py-1 text-sm text-zinc-100 outline-none"
                 >
                   <option value="">
                     {planets.isLoading ? "Loading…" : "Pick a planet…"}
                   </option>
                   {planets.data?.map((pl) => (
                     <option key={pl.id} value={pl.id}>
-                      {pl.name}
+                      {pl.name} ({pl.planetType})
                     </option>
                   ))}
                 </select>

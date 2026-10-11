@@ -278,44 +278,77 @@ impl Sde {
             .map_err(Into::into)
     }
 
-    /// A solar system's planets `(itemID, itemName)`, ordered by id (which
-    /// tracks orbit order — "System I" through "System VIII"). `groupID = 7`
-    /// is `invGroups`' "Planet" category; `mapDenormalize` holds every
-    /// celestial, not just planets, so this filters to just that group. For
-    /// the PI Planner's "where are you building this" picker (#965).
-    pub fn planets_in_system(&self, system_id: i64) -> Result<Vec<(i64, String)>, SdeError> {
+    /// A solar system's planets `(itemID, itemName, planetType)`, ordered by
+    /// id (which tracks orbit order — "System I" through "System VIII").
+    /// `groupID = 7` is `invGroups`' "Planet" category; `mapDenormalize`
+    /// holds every celestial, not just planets, so this filters to just
+    /// that group. `planetType` is the bracketed part of the planet's own
+    /// `invTypes.typeName` (e.g. "Planet (Barren)" -> "Barren") — the same
+    /// vocabulary `ChainNode.planetTypes` uses, so the Planner's planet
+    /// picker can show e.g. "Jita IV (Gas)" right next to the chain's own
+    /// planet-type badges. For the PI Planner's "where are you building
+    /// this" picker (#965, #966).
+    pub fn planets_in_system(
+        &self,
+        system_id: i64,
+    ) -> Result<Vec<(i64, String, String)>, SdeError> {
         let mut stmt = self.conn.prepare(
-            "SELECT itemID, itemName FROM mapDenormalize
-             WHERE solarSystemID = ?1 AND groupID = 7
-             ORDER BY itemID",
+            "SELECT d.itemID, d.itemName, t.typeName
+             FROM mapDenormalize d
+             JOIN invTypes t ON t.typeID = d.typeID
+             WHERE d.solarSystemID = ?1 AND d.groupID = 7
+             ORDER BY d.itemID",
         )?;
-        let rows = stmt.query_map(params![system_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let rows = stmt.query_map(params![system_id], |r| {
+            let item_id: i64 = r.get(0)?;
+            let item_name: String = r.get(1)?;
+            let planet_type_name: String = r.get(2)?;
+            Ok((item_id, item_name, planet_type_label(&planet_type_name)))
+        })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
+}
+
+/// Extract the bracketed planet type from an `invTypes.typeName` like
+/// `"Planet (Barren)"` -> `"Barren"`. Falls back to the raw name if it
+/// doesn't match that pattern — defensive, not a claim the SDE ever departs
+/// from it today.
+fn planet_type_label(type_name: &str) -> String {
+    type_name
+        .split_once('(')
+        .and_then(|(_, rest)| rest.strip_suffix(')'))
+        .map(str::to_string)
+        .unwrap_or_else(|| type_name.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::test_sde;
+    use super::planet_type_label;
 
     #[test]
-    fn planets_in_system_filters_to_group_seven_ordered_by_id() {
+    fn planets_in_system_filters_to_group_seven_ordered_by_id_with_planet_type() {
         let sde = test_sde(
-            "CREATE TABLE mapDenormalize(itemID INT, itemName TEXT, solarSystemID INT, groupID INT);
+            "CREATE TABLE mapDenormalize(itemID INT, itemName TEXT, solarSystemID INT, groupID INT, typeID INT);
+             CREATE TABLE invTypes(typeID INT, typeName TEXT);
+             INSERT INTO invTypes VALUES
+               (2016, 'Planet (Barren)'),
+               (13, 'Planet (Gas)'),
+               (2015, 'Planet (Lava)');
              INSERT INTO mapDenormalize VALUES
-               (40009082, 'Jita 4', 30000142, 7),
-               (40009077, 'Jita 1', 30000142, 7),
-               (40009078, 'Jita 2', 30000142, 7),
-               (99999999, 'Jita 4 - Moon 1', 30000142, 8),
-               (11111111, 'Amarr 1', 30002187, 7);",
+               (40009082, 'Jita 4', 30000142, 7, 13),
+               (40009077, 'Jita 1', 30000142, 7, 2016),
+               (40009078, 'Jita 2', 30000142, 7, 2016),
+               (99999999, 'Jita 4 - Moon 1', 30000142, 8, 2016),
+               (11111111, 'Amarr 1', 30002187, 7, 2015);",
         );
         let planets = sde.planets_in_system(30000142).unwrap();
         assert_eq!(
             planets,
             vec![
-                (40009077, "Jita 1".to_string()),
-                (40009078, "Jita 2".to_string()),
-                (40009082, "Jita 4".to_string()),
+                (40009077, "Jita 1".to_string(), "Barren".to_string()),
+                (40009078, "Jita 2".to_string(), "Barren".to_string()),
+                (40009082, "Jita 4".to_string(), "Gas".to_string()),
             ]
         );
     }
@@ -323,8 +356,23 @@ mod tests {
     #[test]
     fn planets_in_system_is_empty_for_an_unknown_system() {
         let sde = test_sde(
-            "CREATE TABLE mapDenormalize(itemID INT, itemName TEXT, solarSystemID INT, groupID INT);",
+            "CREATE TABLE mapDenormalize(itemID INT, itemName TEXT, solarSystemID INT, groupID INT, typeID INT);
+             CREATE TABLE invTypes(typeID INT, typeName TEXT);",
         );
         assert!(sde.planets_in_system(30000142).unwrap().is_empty());
+    }
+
+    #[test]
+    fn planet_type_label_extracts_the_bracketed_part() {
+        assert_eq!(planet_type_label("Planet (Barren)"), "Barren");
+        assert_eq!(
+            planet_type_label("Planet (Scorched Barren)"),
+            "Scorched Barren"
+        );
+    }
+
+    #[test]
+    fn planet_type_label_falls_back_to_the_raw_name_without_brackets() {
+        assert_eq!(planet_type_label("Something Else"), "Something Else");
     }
 }
