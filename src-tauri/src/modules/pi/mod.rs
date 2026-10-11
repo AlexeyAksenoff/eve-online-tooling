@@ -5,3 +5,4 @@
 pub mod commands;
 mod notes;
 mod planet_types;
+pub mod setups;

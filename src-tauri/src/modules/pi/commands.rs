@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 use crate::esi::{authed_get, AuthState};
+use crate::model::{id_names, IdName};
 use crate::sde::{PlanetSchematic, Sde};
 use crate::storage;
 
@@ -699,6 +700,18 @@ pub fn pi_production_chain(
 ) -> Result<ChainNode, crate::model::AppError> {
     let sde = crate::sde::open_from_app(&app)?;
     production_chain(&sde, type_id).map_err(|e| e.to_string().into())
+}
+
+/// A solar system's planets, for the Planner's "where are you building this"
+/// picker (#965) — paired with a system search (e.g. the Route module's
+/// `route_system_search`) in a system-then-planet flow on the frontend.
+#[tauri::command]
+pub fn pi_planets_in_system(app: AppHandle, system_id: i64) -> Result<Vec<IdName>, String> {
+    let sde = crate::sde::open_from_app(&app)?;
+    let pairs = sde
+        .planets_in_system(system_id)
+        .map_err(|e| e.to_string())?;
+    Ok(id_names(pairs))
 }
 
 #[cfg(test)]

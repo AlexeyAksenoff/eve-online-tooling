@@ -540,12 +540,164 @@ describe("PIPage Planner tab", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Mechanical Parts")).toBeInTheDocument();
 
-    // Removing one leaves the other.
     fireEvent.click(
       screen.getByRole("button", { name: "Remove Robotics from planner" }),
     );
     expect(screen.queryByText("Mechanical Parts")).not.toBeInTheDocument();
     expect(screen.getByText("Ukomi Superconductors")).toBeInTheDocument();
+  });
+
+  it("saves per-plan notes on blur", async () => {
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [],
+      pi_locked_get: () => [],
+      sde_search_pi_commodities: () => [{ id: 9848, name: "Robotics" }],
+      pi_production_chain: () => ROBOTICS_CHAIN,
+    });
+    renderWithQuery(<PIPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Planner" }));
+    fireEvent.change(screen.getByPlaceholderText(/search a p1-p4 commodity/i), {
+      target: { value: "robo" },
+    });
+    fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
+    await screen.findByText("Mechanical Parts");
+
+    const notes = screen.getByPlaceholderText(/notes — what you're building/i);
+    fireEvent.change(notes, { target: { value: "build for hub restock" } });
+    fireEvent.blur(notes);
+
+    expect(notes).toHaveValue("build for hub restock");
+  });
+
+  it("assigns a solar system and planet to a plan", async () => {
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [],
+      pi_locked_get: () => [],
+      sde_search_pi_commodities: () => [{ id: 9848, name: "Robotics" }],
+      pi_production_chain: () => ROBOTICS_CHAIN,
+      route_system_search: () => [{ id: 30000142, name: "Jita" }],
+      pi_planets_in_system: () => [
+        { id: 40009077, name: "Jita I" },
+        { id: 40009082, name: "Jita IV" },
+      ],
+    });
+    renderWithQuery(<PIPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Planner" }));
+    fireEvent.change(screen.getByPlaceholderText(/search a p1-p4 commodity/i), {
+      target: { value: "robo" },
+    });
+    fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
+    await screen.findByText("Mechanical Parts");
+
+    fireEvent.change(screen.getByPlaceholderText("Solar system…"), {
+      target: { value: "jita" },
+    });
+    fireEvent.click(await screen.findByText("Jita", {}, { timeout: 2000 }));
+
+    const planetSelect = await screen.findByLabelText("Planet");
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("pi_planets_in_system", {
+        systemId: 30000142,
+      }),
+    );
+    fireEvent.change(planetSelect, { target: { value: "40009082" } });
+
+    expect((planetSelect as HTMLSelectElement).value).toBe("40009082");
+  });
+
+  it("saves the current picks as a named setup", async () => {
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [],
+      pi_locked_get: () => [],
+      sde_search_pi_commodities: () => [{ id: 9848, name: "Robotics" }],
+      pi_production_chain: () => ROBOTICS_CHAIN,
+      pi_planner_setup_save: () => ({
+        id: "jita-industry",
+        name: "Jita industry",
+        items: [],
+      }),
+    });
+    renderWithQuery(<PIPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Planner" }));
+    fireEvent.change(screen.getByPlaceholderText(/search a p1-p4 commodity/i), {
+      target: { value: "robo" },
+    });
+    fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
+    await screen.findByText("Mechanical Parts");
+
+    fireEvent.click(screen.getByRole("button", { name: /save setup/i }));
+    fireEvent.change(screen.getByPlaceholderText(/^setup — /i), {
+      target: { value: "Jita industry" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "pi_planner_setup_save",
+        expect.objectContaining({ name: "Jita industry" }),
+      ),
+    );
+    expect(screen.getByText("Saved ✓")).toBeInTheDocument();
+  });
+
+  it("browses, loads and deletes a saved setup", async () => {
+    const SAVED = {
+      id: "jita-industry",
+      name: "Jita industry",
+      items: [
+        {
+          typeId: 9848,
+          name: "Robotics",
+          notes: "from a saved setup",
+          systemId: 30000142,
+          systemName: "Jita",
+          planetId: 40009082,
+          planetName: "Jita IV",
+        },
+      ],
+    };
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [],
+      pi_locked_get: () => [],
+      pi_planner_setups: () => [SAVED],
+      pi_production_chain: () => ROBOTICS_CHAIN,
+      pi_planets_in_system: () => [],
+      pi_planner_setup_delete: () => undefined,
+    });
+    renderWithQuery(<PIPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Planner" }));
+    fireEvent.click(screen.getByRole("button", { name: "Setups" }));
+
+    expect(await screen.findByText("Jita industry")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Jita industry"));
+
+    // Loading replaces the working plan with the setup's items.
+    await screen.findByText("Mechanical Parts");
+    expect(
+      screen.getByText(/from a saved setup/i, { selector: "textarea" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Setups" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete Jita industry" }),
+    );
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("pi_planner_setup_delete", {
+        id: "jita-industry",
+      }),
+    );
   });
 });
 
