@@ -4,6 +4,7 @@ import type { MassProductionPlan } from "../../lib/api";
 import { invokeMock, mockInvoke, renderWithQuery } from "../../test/harness";
 
 import { MassProductionPage } from "./MassProductionPage";
+import { AssetsPage } from "../assets/AssetsPage";
 
 const SDE_OK = { installed: true, path: "/sde", sizeBytes: 1, updated: false };
 
@@ -229,6 +230,65 @@ describe("MassProductionPage", () => {
 
     expect(await screen.findByText("10")).toBeInTheDocument();
     expect(screen.queryByText("5,010")).not.toBeInTheDocument();
+  });
+
+  it("sees locations the Assets page already loaded, without a separate fetch", async () => {
+    mockInvoke({
+      sde_status: () => SDE_OK,
+      massprod_plan: () => PLAN,
+      auth_characters: () => [],
+      auth_active_character: () => null,
+      assets_load: () => ({
+        rows: [
+          {
+            typeId: 11399,
+            name: "Morphite",
+            quantity: 5000,
+            sellPrice: 1000,
+            buyPrice: 900,
+            sellValue: 5_000_000,
+            buyValue: 4_500_000,
+            volume: 5000,
+            category: "Material",
+            group: "Mineral",
+            owner: "Alt One",
+            isCorp: false,
+            locationId: 60003760,
+            station: "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
+            solarSystem: "Jita",
+          },
+        ],
+        roots: [],
+        sellTotal: 5_000_000,
+        buyTotal: 4_500_000,
+        volumeTotal: 5000,
+      }),
+    });
+    renderWithQuery(
+      <>
+        <AssetsPage />
+        <MassProductionPage />
+      </>,
+    );
+
+    // The Assets page auto-loads on mount (no click needed there either) —
+    // wait for its own "Refresh" button to confirm the shared query landed.
+    await screen.findByRole("button", { name: "Refresh" });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("assets_load"));
+
+    await pasteAndImport("5MN Microwarpdrive II Blueprint");
+    await screen.findByText("Mineral");
+
+    // Never clicked "Load owned stock" here — the picker is already
+    // populated from the Assets page's load, sharing one cache entry.
+    fireEvent.change(
+      screen.getByTitle(
+        "Subtract what the roster already has stocked at a location",
+      ),
+      { target: { value: "60003760" } },
+    );
+
+    expect(await screen.findByText("10")).toBeInTheDocument();
   });
 
   it("groups the matched blueprints by tech tier", async () => {

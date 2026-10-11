@@ -3,13 +3,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ALL_CHARACTERS,
   activeCharacter,
-  assetsLoad,
   authCharacters,
   authLogin,
   type AssetNode,
   type AssetRow,
-  type AssetsPayload,
 } from "../../lib/api";
+import { assetsKeys } from "../../lib/queryKeys";
 import { formatInt, formatIsk, sortRows } from "../../lib/format";
 import { usePersistentSort } from "../../lib/usePersistentSort";
 import {
@@ -44,16 +43,23 @@ function Workbench() {
   const [treeSearch, setTreeSearch] = useState("");
   const [owners, setOwners] = useState<Set<string>>(new Set());
   const [treeOwners, setTreeOwners] = useState<Set<string>>(new Set());
-  const [assets, setAssets] = useState<AssetsPayload | null>(null);
 
-  const loadMut = useMutation({
-    mutationFn: () => assetsLoad(),
-    onSuccess: (d) => {
-      setAssets(d);
-      setOwners(new Set());
-      setTreeOwners(new Set());
-    },
-  });
+  // Shared with Mass Production's "still needed" stock picker — whichever
+  // of the two loads first populates the cache for both, so neither has to
+  // re-fetch what the other already pulled from ESI.
+  const assetsQuery = useQuery(assetsKeys.load());
+  const assets = assetsQuery.data ?? null;
+
+  // Reset owner filters whenever a fresh payload lands — avoids a stale
+  // filter referencing an owner no longer present in the new data.
+  const prevData = useRef<typeof assetsQuery.data>(undefined);
+  useEffect(() => {
+    if (assetsQuery.data === undefined || assetsQuery.data === prevData.current)
+      return;
+    prevData.current = assetsQuery.data;
+    setOwners(new Set());
+    setTreeOwners(new Set());
+  }, [assetsQuery.data]);
 
   // Follow the global character selector: reload whenever the active
   // character changes. Guard on the previous value so unrelated re-renders
@@ -63,12 +69,6 @@ function Workbench() {
     queryFn: activeCharacter,
   });
   const prevActive = useRef<number | null | undefined>(undefined);
-  const inited = useRef(false);
-  useEffect(() => {
-    if (inited.current) return;
-    inited.current = true;
-    loadMut.mutate();
-  }, [loadMut]);
   useEffect(() => {
     if (prevActive.current === undefined) {
       prevActive.current = active.data;
@@ -76,8 +76,8 @@ function Workbench() {
     }
     if (active.data === prevActive.current) return;
     prevActive.current = active.data;
-    loadMut.mutate();
-  }, [active.data, loadMut]);
+    void assetsQuery.refetch();
+  }, [active.data, assetsQuery]);
 
   const chars = useQuery({
     queryKey: ["auth", "characters"],
@@ -204,12 +204,12 @@ function Workbench() {
               {isTree ? "Flat list" : "Location tree"}
             </button>
             <button
-              onClick={() => loadMut.mutate()}
-              disabled={loadMut.isPending}
+              onClick={() => void assetsQuery.refetch()}
+              disabled={assetsQuery.isFetching}
               className="rounded border border-zinc-700 px-4 py-1.5 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
               title="Reload assets from ESI"
             >
-              {loadMut.isPending ? "Loading…" : "Refresh"}
+              {assetsQuery.isFetching ? "Loading…" : "Refresh"}
             </button>
           </div>
         }
@@ -230,9 +230,9 @@ function Workbench() {
 
       <QueryResult
         result={{
-          isError: loadMut.isError,
-          error: loadMut.error,
-          isPending: loadMut.isPending && !assets,
+          isError: assetsQuery.isError,
+          error: assetsQuery.error,
+          isPending: assetsQuery.isPending,
           data: assets ?? undefined,
         }}
         pendingLabel="Loading…"
@@ -241,8 +241,8 @@ function Workbench() {
         isEmpty={(d) => d.rows.length === 0}
         emptyTitle="No assets found."
         emptyHint="Your roster has no valued holdings — or a character/corp filter is hiding everything."
-        updatedAt={loadMut.isSuccess ? loadMut.submittedAt : undefined}
-        fetching={loadMut.isPending}
+        updatedAt={assetsQuery.dataUpdatedAt || undefined}
+        fetching={assetsQuery.isFetching}
       >
         {(d) =>
           isTree ? (

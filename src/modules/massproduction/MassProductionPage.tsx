@@ -10,7 +10,6 @@ import {
 } from "lucide-react";
 
 import {
-  assetsLoad,
   errorMessage,
   isAuthRequired,
   massprodDeleteList,
@@ -29,7 +28,7 @@ import {
   type MaterialGroup,
   type PlanMode,
 } from "../../lib/api";
-import { SHOPPING_LISTS_KEY } from "../../lib/queryKeys";
+import { assetsKeys, SHOPPING_LISTS_KEY } from "../../lib/queryKeys";
 import { formatInt } from "../../lib/format";
 import { useCopyToClipboard } from "../../lib/useCopyToClipboard";
 import { Page, PageHeader } from "../../components/page";
@@ -598,11 +597,19 @@ function PlanResult({
 }) {
   const copiesHeader = mode === "hypothetical" ? "Assumed ME" : "Owned copies";
 
-  // Loaded on demand (a button click, not auto-fetched) — pulling the whole
-  // roster's ESI assets on every Planner visit would be wasteful for anyone
-  // not using the "still needed" location picker.
-  const assetsMut = useMutation({ mutationFn: () => assetsLoad() });
-  const assetRows = useMemo(() => assetsMut.data?.rows ?? [], [assetsMut.data]);
+  // Shares a cache entry with the Assets page (`assetsKeys.load()`): if the
+  // roster's assets were already loaded there this session, the location
+  // picker below sees them immediately with no extra fetch. `enabled:
+  // false` only turns off *this* query's own auto-fetch-on-mount — pulling
+  // the whole roster's ESI assets on every Planner visit would be wasteful
+  // for anyone not using the "still needed" picker — "Load owned stock"
+  // below triggers an explicit `refetch()` for whoever hasn't visited
+  // Assets yet.
+  const assetsQuery = useQuery({ ...assetsKeys.load(), enabled: false });
+  const assetRows = useMemo(
+    () => assetsQuery.data?.rows ?? [],
+    [assetsQuery.data],
+  );
   const locations = useMemo(() => assetLocations(assetRows), [assetRows]);
   const ownedIndex = useMemo(() => ownedQuantityIndex(assetRows), [assetRows]);
 
@@ -645,24 +652,26 @@ function PlanResult({
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-2 text-xs text-zinc-500">
             <button
-              onClick={() => assetsMut.mutate()}
-              disabled={assetsMut.isPending}
+              onClick={() => void assetsQuery.refetch()}
+              disabled={assetsQuery.isFetching}
               className="rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
             >
-              {assetsMut.isPending
+              {assetsQuery.isFetching
                 ? "Loading stock…"
-                : assetsMut.isSuccess
+                : assetsQuery.isSuccess
                   ? "Reload stock"
                   : "Load owned stock"}
             </button>
-            {assetsMut.isSuccess && (
+            {assetsQuery.isSuccess && (
               <span>
                 Pick a location per group below to subtract what the roster
                 already has there.
               </span>
             )}
             <InlineError
-              message={assetsMut.isError ? errorMessage(assetsMut.error) : null}
+              message={
+                assetsQuery.isError ? errorMessage(assetsQuery.error) : null
+              }
             />
           </div>
           {plan.groups.map((g) => (
