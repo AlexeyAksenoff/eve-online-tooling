@@ -472,6 +472,37 @@ describe("PIPage Planner tab", () => {
     expect(await screen.findByText("Mechanical Parts")).toBeInTheDocument();
   });
 
+  it("tolerates a pick saved before the imports field existed, without crashing", async () => {
+    // Simulates real stale localStorage from before #971: a pick stored
+    // with no `imports` key at all.
+    localStorage.setItem(
+      "pi.plannerPicks",
+      JSON.stringify([
+        {
+          id: 9848,
+          name: "Robotics",
+          notes: "",
+          systemId: null,
+          systemName: null,
+          planetId: null,
+          planetName: null,
+        },
+      ]),
+    );
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [],
+      pi_locked_get: () => [],
+      pi_production_chain: () => ROBOTICS_CHAIN,
+    });
+    renderWithQuery(<PIPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Planner" }));
+
+    expect(await screen.findByText("Mechanical Parts")).toBeInTheDocument();
+  });
+
   it("Clear all removes every planned chain", async () => {
     mockInvoke({
       sde_status: () => SDE_INSTALLED,
