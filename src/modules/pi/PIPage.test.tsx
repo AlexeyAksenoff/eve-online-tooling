@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { extractionAdvice, runway, runwayThresholds } from "./balance";
 import type { ChainNode, ColonyView, SdeStatus } from "../../lib/api";
 import { invokeMock, mockInvoke, renderWithQuery } from "../../test/harness";
@@ -335,16 +335,73 @@ describe("PIPage Planner tab", () => {
     });
     fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
 
-    // Root badge: Plasma-only, single-planet.
-    expect(await screen.findByText("Plasma")).toBeInTheDocument();
+    // Root badge: Plasma-only, single-planet (several rows also badge
+    // "Plasma" since every node in this fixture includes it — scope to the
+    // header row specifically).
+    const header = (await screen.findByText("Robotics")).parentElement!;
+    expect(within(header).getByText("Plasma")).toBeInTheDocument();
     // Nested P2 row, and its P1 child inlining the P0 dependency instead of
     // a separate bullet.
     expect(screen.getByText("Mechanical Parts")).toBeInTheDocument();
     expect(screen.getByText("Reactive Metals")).toBeInTheDocument();
     expect(screen.getByText(/← Base Metals \(P0\)/)).toBeInTheDocument();
     expect(screen.getByText("40/cycle")).toBeInTheDocument();
-    // The P0 leaf itself never gets its own bullet row.
+    // The P0 leaf itself never gets its own name row — just a badge row.
     expect(screen.queryByText("Base Metals", { exact: true })).toBeNull();
+  });
+
+  it("badges every node including the P0 leaf, not just the root", async () => {
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [],
+      pi_locked_get: () => [],
+      sde_search_pi_commodities: () => [{ id: 9848, name: "Robotics" }],
+      pi_production_chain: () => ROBOTICS_CHAIN,
+    });
+    renderWithQuery(<PIPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Planner" }));
+    fireEvent.change(screen.getByPlaceholderText(/search a p1-p4 commodity/i), {
+      target: { value: "robo" },
+    });
+    fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
+    await screen.findByText("Mechanical Parts");
+
+    // Base Metals (the P0 leaf) has 5 planet types; its badge row renders
+    // all of them even though the leaf has no name label of its own.
+    for (const pt of ["Barren", "Gas", "Lava", "Storm"]) {
+      expect(screen.getAllByText(pt).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("colors a material's planet-type badges green when they also build the whole root product, blue otherwise", async () => {
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [],
+      pi_locked_get: () => [],
+      sde_search_pi_commodities: () => [{ id: 9848, name: "Robotics" }],
+      pi_production_chain: () => ROBOTICS_CHAIN,
+    });
+    renderWithQuery(<PIPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Planner" }));
+    fireEvent.change(screen.getByPlaceholderText(/search a p1-p4 commodity/i), {
+      target: { value: "robo" },
+    });
+    fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
+
+    // Mechanical Parts' own planetTypes are ["Barren", "Plasma"]; the root
+    // (Robotics) is Plasma-only. Plasma also builds the whole chain → green;
+    // Barren only makes this one material → blue.
+    const row = (await screen.findByText("Mechanical Parts")).closest("div")!;
+    expect(within(row).getByText("Plasma").className).toContain(
+      "bg-emerald-900/40",
+    );
+    expect(within(row).getByText("Barren").className).toContain(
+      "bg-sky-900/40",
+    );
   });
 
   it("shows a 'needs imports' notice for a commodity with no single-planet option", async () => {
@@ -366,14 +423,14 @@ describe("PIPage Planner tab", () => {
       await screen.findByText("Nano-Factory", {}, { timeout: 2000 }),
     );
 
+    // Both the root (Nano-Factory) and the empty branch (Ukomi
+    // Superconductors) flag "needs imports" — at least 2 instances.
     await waitFor(() =>
       expect(
-        screen.getByText("Needs imports — no single planet"),
-      ).toBeInTheDocument(),
+        screen.getAllByText("Needs imports — no single planet").length,
+      ).toBeGreaterThanOrEqual(2),
     );
-    // The empty branch inside the tree also flags itself.
     expect(screen.getByText("Ukomi Superconductors")).toBeInTheDocument();
-    expect(screen.getAllByText("needs imports").length).toBeGreaterThan(0);
   });
 });
 
