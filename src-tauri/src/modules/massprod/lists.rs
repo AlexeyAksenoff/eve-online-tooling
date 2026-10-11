@@ -111,22 +111,19 @@ pub struct SaveListItem {
     pub build_runs: Option<i64>,
 }
 
-/// Save a build list (pasted blueprints + any per-line run overrides) under
-/// a name, returning the resolved saved list. The id is a slug of the name,
-/// de-duplicated with a numeric suffix (same scheme as
-/// `shopping_create_list`). Every saved list is user-removable.
-#[tauri::command]
-pub fn massprod_save_list(
-    app: AppHandle,
-    name: String,
-    items: Vec<SaveListItem>,
-) -> Result<BuildList, String> {
-    let name = name.trim().to_string();
-    if name.is_empty() {
-        return Err("list name can't be empty".into());
+/// Insert-or-overwrite a list by exact name into `store`, returning the
+/// resulting `StoredList`. Pure core of `massprod_save_list`, split out so
+/// the overwrite-vs-create-new-id decision is unit-testable without an
+/// `AppHandle`. A name matching an existing list overwrites its items in
+/// place (same id — the normal "load it, add/remove a few blueprints, save
+/// again" loop), rather than creating a sibling "name-2". A genuinely new
+/// name gets a fresh id: a slug of the name, de-duplicated with a numeric
+/// suffix (same scheme as `shopping_create_list`).
+fn upsert_list(store: &mut Store, name: String, items: Vec<StoredLine>) -> StoredList {
+    if let Some(existing) = store.lists.iter_mut().find(|l| l.name == name) {
+        existing.items = items;
+        return existing.clone();
     }
-    let (dir, sde) = crate::sde::dir_and_sde(&app)?;
-    let mut store = load(&dir);
 
     let base: String = name
         .to_lowercase()
@@ -146,18 +143,36 @@ pub fn massprod_save_list(
         n += 1;
     }
 
-    let list = StoredList {
-        id,
-        name,
-        items: items
-            .into_iter()
-            .map(|i| StoredLine {
-                type_id: i.type_id,
-                build_runs: i.build_runs,
-            })
-            .collect(),
-    };
+    let list = StoredList { id, name, items };
     store.lists.push(list.clone());
+    list
+}
+
+/// Save a build list (pasted blueprints + any per-line run overrides) under
+/// a name, returning the resolved saved list. Every saved list is
+/// user-removable; see [`upsert_list`] for the overwrite-vs-create rule.
+#[tauri::command]
+pub fn massprod_save_list(
+    app: AppHandle,
+    name: String,
+    items: Vec<SaveListItem>,
+) -> Result<BuildList, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("list name can't be empty".into());
+    }
+    let (dir, sde) = crate::sde::dir_and_sde(&app)?;
+    let mut store = load(&dir);
+
+    let stored_items: Vec<StoredLine> = items
+        .into_iter()
+        .map(|i| StoredLine {
+            type_id: i.type_id,
+            build_runs: i.build_runs,
+        })
+        .collect();
+
+    let list = upsert_list(&mut store, name, stored_items);
     save(&dir, &store)?;
     Ok(resolve(&sde, &list))
 }
@@ -209,5 +224,53 @@ mod tests {
         // "Type <id>" placeholder instead of erroring the whole list out.
         assert_eq!(resolved.items[1].name, "Type 999999");
         assert_eq!(resolved.items[1].build_runs, None);
+    }
+
+    #[test]
+    fn upsert_list_overwrites_an_existing_list_with_the_same_name_in_place() {
+        let mut store = Store {
+            lists: vec![StoredList {
+                id: "doctrine".into(),
+                name: "Doctrine".into(),
+                items: vec![StoredLine {
+                    type_id: 1073,
+                    build_runs: Some(5),
+                }],
+            }],
+        };
+
+        let saved = upsert_list(
+            &mut store,
+            "Doctrine".into(),
+            vec![StoredLine {
+                type_id: 999,
+                build_runs: None,
+            }],
+        );
+
+        // Same id — anything that referenced the old list by id (e.g. a
+        // "Load" click mid-edit) still points at the updated one.
+        assert_eq!(saved.id, "doctrine");
+        assert_eq!(store.lists.len(), 1);
+        assert_eq!(store.lists[0].items[0].type_id, 999);
+    }
+
+    #[test]
+    fn upsert_list_de_duplicates_the_id_when_a_different_name_slugs_to_the_same_base() {
+        let mut store = Store {
+            lists: vec![StoredList {
+                id: "doctrine".into(),
+                // A different exact name that happens to slug to the same
+                // base as the one being saved below — no exact-name match,
+                // so this must hit the new-id path and collide.
+                name: "Doctrine!".into(),
+                items: vec![],
+            }],
+        };
+
+        let saved = upsert_list(&mut store, "Doctrine?".into(), vec![]);
+
+        assert_eq!(saved.id, "doctrine-2");
+        assert_eq!(store.lists.len(), 2);
     }
 }

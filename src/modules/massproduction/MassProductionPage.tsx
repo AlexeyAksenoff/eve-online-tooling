@@ -142,6 +142,29 @@ function Workbench() {
     build.mutate(lines);
   }
 
+  /** Drop one blueprint from the current plan (and its override, if any),
+   *  then recompute with everything else carried forward unchanged — the
+   *  "remove an item from the build list" counterpart to `commitBuildRuns`,
+   *  so a loaded/edited list can be trimmed without going back to the raw
+   *  paste text. */
+  function removeBlueprint(typeId: number) {
+    if (plan == null) return;
+    const nextOverrides = { ...overrides };
+    delete nextOverrides[typeId];
+    setOverrides(nextOverrides);
+
+    const lines: BlueprintLine[] = [
+      ...plan.matchedBlueprints
+        .filter((b) => b.typeId !== typeId)
+        .map((b) => ({
+          name: b.name,
+          buildRuns: nextOverrides[b.typeId] ?? null,
+        })),
+      ...plan.unresolvedNames.map((name) => ({ name })),
+    ];
+    build.mutate(lines);
+  }
+
   /** Load a saved build list: repopulate the paste box for visibility/edit,
    *  restore its saved per-line overrides, and recompute immediately. */
   function loadBuildList(list: BuildList) {
@@ -200,6 +223,7 @@ function Workbench() {
             mode={mode}
             overrides={overrides}
             onCommitBuildRuns={commitBuildRuns}
+            onRemoveBlueprint={removeBlueprint}
           />
         )}
       </div>
@@ -590,11 +614,13 @@ function PlanResult({
   mode,
   overrides,
   onCommitBuildRuns,
+  onRemoveBlueprint,
 }: {
   plan: MassProductionPlan;
   mode: PlanMode;
   overrides: Record<number, number>;
   onCommitBuildRuns: (typeId: number, value: number | null) => void;
+  onRemoveBlueprint: (typeId: number) => void;
 }) {
   const copiesHeader = mode === "hypothetical" ? "Assumed ME" : "Owned copies";
 
@@ -648,6 +674,7 @@ function PlanResult({
               copiesHeader={copiesHeader}
               overrides={overrides}
               onCommitBuildRuns={onCommitBuildRuns}
+              onRemove={onRemoveBlueprint}
             />
           ))}
         </div>
@@ -710,6 +737,7 @@ function TierSection({
   copiesHeader,
   overrides,
   onCommitBuildRuns,
+  onRemove,
 }: {
   tier: string;
   blueprints: MatchedBlueprint[];
@@ -717,6 +745,7 @@ function TierSection({
   copiesHeader: string;
   overrides: Record<number, number>;
   onCommitBuildRuns: (typeId: number, value: number | null) => void;
+  onRemove: (typeId: number) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -739,6 +768,7 @@ function TierSection({
               <th className="px-3 py-1.5 text-left">Blueprint</th>
               <th className="px-3 py-1.5 text-right">{copiesHeader}</th>
               <th className="px-3 py-1.5 text-right">Runs to build</th>
+              <th className="px-3 py-1.5 text-right" />
             </tr>
           </thead>
           <tbody>
@@ -767,6 +797,16 @@ function TierSection({
                     overridden={overrides[b.typeId] != null}
                     onCommit={onCommitBuildRuns}
                   />
+                </td>
+                <td className="px-3 py-1.5 text-right">
+                  <button
+                    onClick={() => onRemove(b.typeId)}
+                    aria-label={`Remove ${b.name}`}
+                    title="Remove this blueprint from the build list"
+                    className="text-zinc-600 hover:text-rose-400"
+                  >
+                    <Trash2 size={13} />
+                  </button>
                 </td>
               </tr>
             ))}
