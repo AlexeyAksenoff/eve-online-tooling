@@ -90,11 +90,7 @@ interface Option {
  * "Custom" when saved.
  */
 export function TargetProfileBox() {
-  const {
-    targetProfile: value,
-    setTargetProfile: onChange,
-    damageProfile,
-  } = useFitState();
+  const { targetProfile: value, setTargetProfile: onChange } = useFitState();
   const queryClient = useQueryClient();
   const library = useQuery({
     queryKey: ["fitting", "targetProfiles"],
@@ -158,7 +154,10 @@ export function TargetProfileBox() {
       label: saveName.trim(),
       group: "Custom",
       target: value,
-      damageProfile: damageProfile ?? [0.25, 0.25, 0.25, 0.25],
+      // The incoming-damage-profile picker that used to let this vary was
+      // removed in favor of a per-damage-type EHP breakdown — every saved
+      // target profile's damage weighting is now just the even default.
+      damageProfile: [0.25, 0.25, 0.25, 0.25],
     });
     setSaveName(null);
     await queryClient.invalidateQueries({

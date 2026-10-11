@@ -27,8 +27,6 @@ export function StatsAside({
     skillLabel,
     jammed,
     setJammed,
-    damageProfile,
-    setDamageProfile,
     neutGjs,
     setNeutGjs,
     spoolPct,
@@ -38,7 +36,6 @@ export function StatsAside({
   } = useFitState();
   const { stats, jammedActive } = useFitStats();
   const onJam = setJammed;
-  const onDamageProfile = setDamageProfile;
   const onNeutGjs = setNeutGjs;
   return (
     <aside className="w-72 shrink-0 overflow-auto">
@@ -111,12 +108,7 @@ export function StatsAside({
         )}
 
         {stats.data?.tank && (
-          <TankResistsPanel
-            skillLabel={skillLabel}
-            tank={stats.data.tank}
-            damageProfile={damageProfile}
-            onDamageProfile={onDamageProfile}
-          />
+          <TankResistsPanel skillLabel={skillLabel} tank={stats.data.tank} />
         )}
 
         {stats.data?.navigation && (

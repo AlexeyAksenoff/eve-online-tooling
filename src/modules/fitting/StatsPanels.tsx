@@ -1,13 +1,6 @@
-import { useMemo, useState } from "react";
-import { useQuery, type UseMutationResult } from "@tanstack/react-query";
+import type { UseMutationResult } from "@tanstack/react-query";
+import { BatteryCharging, BatteryWarning, Info } from "lucide-react";
 import {
-  BatteryCharging,
-  BatteryWarning,
-  ChevronDown,
-  Info,
-} from "lucide-react";
-import {
-  fittingTargetProfiles,
   type ArchetypeDps,
   type CapStats,
   type DpsBreakdown,
@@ -16,12 +9,11 @@ import {
   type FitProblem,
   type FitStats,
   type NavStats,
-  type NpcProfile,
   type ResourceUsage,
   type TankStats,
 } from "../../lib/api";
 import { formatDuration, formatInt, formatIsk } from "../../lib/format";
-import { DAMAGE_TYPES, km, resistClass } from "./fitHelpers";
+import { DAMAGE_TYPES, effectiveHp, km, resistClass } from "./fitHelpers";
 import {
   classifyArchetype,
   ARCHETYPE_LABEL,
@@ -85,7 +77,7 @@ export function TankResists({ tank }: { tank: TankStats }) {
             {l.r.map((v, i) => (
               <td
                 key={i}
-                title={`${l.name} vs ${DAMAGE_TYPES[i]}: ${formatInt(Math.round(l.hp / (1 - v)))} effective HP (${Math.round(v * 100)}% resisted)`}
+                title={`${l.name} vs ${DAMAGE_TYPES[i]}: ${formatInt(Math.round(effectiveHp(l.hp, v)))} effective HP (${Math.round(v * 100)}% resisted)`}
                 className={`pl-1 text-right ${resistClass(v)}`}
               >
                 {Math.round(v * 100)}
@@ -446,15 +438,6 @@ export function ResourceBar({
   );
 }
 
-/** Generic damage-profile presets for the tank panel's "incoming damage"
- *  picker: `[label, [em, therm, kin, exp]]`. Not fetched from the SDE — a
- *  fallback for "no specific enemy in mind". Real faction/content presets
- *  (#873) come from `fittingTargetProfiles`, grouped by faction alongside
- *  these under "Generic". */
-const GENERIC_DAMAGE_PRESETS: [string, [number, number, number, number]][] = [
-  ["Omni (even)", [0.25, 0.25, 0.25, 0.25]],
-];
-
 /**
  * The four numbers a fitter actually swaps modules to chase (#708): DPS, EHP,
  * capacitor stability and top speed, as a headline block instead of small
@@ -770,142 +753,41 @@ export function DpsBreakdownPanel({
   );
 }
 
-/** One flattened, filterable/groupable damage-profile option. */
-interface DamageOption {
-  kind: string;
-  label: string;
-  profile: [number, number, number, number];
-}
-
-/** Tank section: incoming-damage-profile picker (#873: a searchable dropdown
- *  grouped by faction/content-type, sourced from the SDE-derived NPC library
- *  plus generic fallbacks — see `fittingTargetProfiles`), EHP headline,
- *  active reps, and the per-layer resist table. */
+/** Tank section: EHP broken out per damage type (not blended against a
+ *  chosen "incoming damage" profile — each number assumes 100% of the
+ *  damage is that one type), active reps, and the per-layer resist table. */
 export function TankResistsPanel({
   skillLabel,
   tank,
-  damageProfile,
-  onDamageProfile,
 }: {
   skillLabel: string;
   tank: TankStats;
-  damageProfile: [number, number, number, number] | undefined;
-  onDamageProfile: (p: [number, number, number, number] | undefined) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [q, setQ] = useState("");
-  const library = useQuery({
-    queryKey: ["fitting", "targetProfiles"],
-    queryFn: fittingTargetProfiles,
-  });
-  const grouped = useMemo(() => {
-    const options: DamageOption[] = [
-      ...GENERIC_DAMAGE_PRESETS.map(([label, profile]) => ({
-        kind: "Generic",
-        label,
-        profile,
-      })),
-      ...(library.data?.builtIn ?? []).map((p: NpcProfile) => ({
-        kind: p.group,
-        label: p.label,
-        profile: p.damageProfile,
-      })),
-      ...(library.data?.custom ?? []).map((p: NpcProfile) => ({
-        kind: "Custom",
-        label: p.label,
-        profile: p.damageProfile,
-      })),
-    ];
-    const needle = q.trim().toLowerCase();
-    const filtered = needle
-      ? options.filter(
-          (o) =>
-            o.label.toLowerCase().includes(needle) ||
-            o.kind.toLowerCase().includes(needle),
-        )
-      : options;
-    const byKind = new Map<string, DamageOption[]>();
-    for (const o of filtered)
-      byKind.set(o.kind, [...(byKind.get(o.kind) ?? []), o]);
-    return [...byKind.entries()];
-  }, [library.data, q]);
-  const selectedLabel =
-    [
-      ...GENERIC_DAMAGE_PRESETS,
-      ...(library.data?.builtIn ?? []).map(
-        (p) => [p.label, p.damageProfile] as const,
-      ),
-      ...(library.data?.custom ?? []).map(
-        (p) => [p.label, p.damageProfile] as const,
-      ),
-    ].find(
-      ([, p]) =>
-        damageProfile && JSON.stringify(p) === JSON.stringify(damageProfile),
-    )?.[0] ?? (damageProfile ? "Custom values" : "Omni (even)");
-
   return (
     <div className="space-y-1">
       <h3 className="text-xs uppercase tracking-wide text-zinc-500">
         Tank ({skillLabel})
       </h3>
-      <div className="relative space-y-0.5">
+      <div className="space-y-0.5">
         <div className="text-[10px] uppercase tracking-wide text-zinc-500">
-          Incoming damage
+          EHP by damage type
         </div>
-        <button
-          onClick={() => setOpen((o) => !o)}
-          className="flex items-center gap-1 rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-100 hover:bg-zinc-700"
-        >
-          <span className="max-w-40 truncate">{selectedLabel}</span>
-          <ChevronDown size={12} />
-        </button>
-        {open && (
-          <>
-            <div
-              className="fixed inset-0 z-10"
-              onClick={() => setOpen(false)}
-            />
-            <div className="absolute left-0 z-20 mt-1 max-h-80 w-72 overflow-y-auto rounded border border-zinc-700 bg-zinc-900 p-1 shadow-lg">
-              <input
-                autoFocus
-                value={q}
-                onChange={(e) => setQ(e.currentTarget.value)}
-                placeholder="filter (guristas, sleeper…)"
-                className="mb-1 w-full rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-100 outline-none placeholder:text-zinc-500"
-              />
-              {grouped.map(([kind, opts]) => (
-                <div key={kind}>
-                  <div className="mt-1 px-2 text-[10px] uppercase tracking-wide text-zinc-500">
-                    {kind}
-                  </div>
-                  <ul>
-                    {opts.map((o) => (
-                      <li key={`${o.kind}-${o.label}`}>
-                        <button
-                          onClick={() => {
-                            onDamageProfile(o.profile);
-                            setOpen(false);
-                          }}
-                          className="block w-full truncate rounded px-2 py-1 text-left text-xs text-zinc-200 hover:bg-zinc-800"
-                        >
-                          {o.label}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-              {library.isFetched && grouped.length === 0 && (
-                <div className="px-2 py-1 text-xs text-zinc-500">
-                  No matches.
-                </div>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-      <div className="text-sm text-zinc-300">
-        {formatInt(Math.round(tank.ehp))} EHP
+        <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-sm tabular-nums">
+          {DAMAGE_TYPES.map((d, i) => (
+            <span key={d}>
+              <span className="text-zinc-500">{d}</span>{" "}
+              <span className="text-zinc-200">
+                {formatInt(
+                  Math.round(
+                    effectiveHp(tank.shieldHp, tank.shieldResists[i]) +
+                      effectiveHp(tank.armorHp, tank.armorResists[i]) +
+                      effectiveHp(tank.hullHp, tank.hullResists[i]),
+                  ),
+                )}
+              </span>
+            </span>
+          ))}
+        </div>
       </div>
       {(tank.shieldRepS > 0 ||
         tank.armorRepS > 0 ||
