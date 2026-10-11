@@ -256,6 +256,12 @@ interface PlannerPick {
   systemName: string | null;
   planetId: number | null;
   planetName: string | null;
+  /** Material type ids within this pick's own production chain that are
+   *  marked "produced on another planned colony, ship it in instead" —
+   *  matched against another pick's `id` in the same plan. Toggled from
+   *  the consuming side (the chain node for the imported material), not
+   *  the producing pick. */
+  imports: number[];
 }
 
 function Planner() {
@@ -285,13 +291,21 @@ function Planner() {
           systemName: null,
           planetId: null,
           planetName: null,
+          imports: [],
         },
       ]);
     }
     setPicker(null);
   }
   function removePick(id: number) {
-    setPicks(picks.filter((p) => p.id !== id));
+    // Also drop `id` from every remaining pick's `imports` — otherwise a
+    // removed colony leaves other picks pointing at a producer that no
+    // longer exists.
+    setPicks(
+      picks
+        .filter((p) => p.id !== id)
+        .map((p) => ({ ...p, imports: p.imports.filter((t) => t !== id) })),
+    );
   }
   function updatePick(id: number, patch: Partial<PlannerPick>) {
     setPicks(picks.map((p) => (p.id === id ? { ...p, ...patch } : p)));
@@ -306,6 +320,7 @@ function Planner() {
         systemName: i.systemName,
         planetId: i.planetId,
         planetName: i.planetName,
+        imports: i.imports,
       })),
     );
   }
@@ -358,6 +373,7 @@ function Planner() {
             key={p.id}
             pick={p}
             chain={chains[i]}
+            siblingPicks={picks.filter((o) => o.id !== p.id)}
             onRemove={() => removePick(p.id)}
             onUpdate={(patch) => updatePick(p.id, patch)}
           />
@@ -370,11 +386,13 @@ function Planner() {
 function PlanCard({
   pick,
   chain,
+  siblingPicks,
   onRemove,
   onUpdate,
 }: {
   pick: PlannerPick;
   chain: { isError: boolean; error: unknown; data: ChainNode | undefined };
+  siblingPicks: PlannerPick[];
   onRemove: () => void;
   onUpdate: (patch: Partial<PlannerPick>) => void;
 }) {
@@ -391,6 +409,15 @@ function PlanCard({
     const next = notesDraft;
     setNotesDraft(null);
     if (next !== pick.notes) onUpdate({ notes: next });
+  }
+
+  /** Toggle "this material in my own chain is imported from another
+   *  planned colony" for one node's type id. */
+  function toggleImport(typeId: number) {
+    const next = pick.imports.includes(typeId)
+      ? pick.imports.filter((t) => t !== typeId)
+      : [...pick.imports, typeId];
+    onUpdate({ imports: next });
   }
 
   return (
@@ -421,6 +448,19 @@ function PlanCard({
               tier={chain.data.tier}
             />
           </div>
+          {(() => {
+            const exportedTo = siblingPicks.filter((o) =>
+              o.imports.includes(pick.id),
+            );
+            return (
+              exportedTo.length > 0 && (
+                <div className="mt-1 text-xs text-indigo-400">
+                  ↳ Exported to:{" "}
+                  {exportedTo.map((o) => o.planetName ?? o.name).join(", ")}
+                </div>
+              )
+            );
+          })()}
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Combo
@@ -484,7 +524,14 @@ function PlanCard({
 
           <div className="mt-3 space-y-1">
             {chain.data.children.map((c) => (
-              <ChainRow key={c.typeId} node={c} depth={0} />
+              <ChainRow
+                key={c.typeId}
+                node={c}
+                depth={0}
+                siblingPicks={siblingPicks}
+                imports={pick.imports}
+                onToggleImport={toggleImport}
+              />
             ))}
           </div>
         </>
@@ -527,6 +574,7 @@ function SetupsPanel({
           systemName: p.systemName,
           planetId: p.planetId,
           planetName: p.planetName,
+          imports: p.imports,
         })),
       ),
     onSuccess: () => {
@@ -717,9 +765,30 @@ function PlanetBadges({
  * planner's design in #882. The P0's own `planetTypes` isn't rendered
  * separately — a P1's own set is already its P0 input's set (that's how
  * `intersect_planet_types` computes it bottom-up), so a second badge row
- * would just repeat the one above it. */
-function ChainRow({ node, depth }: { node: ChainNode; depth: number }) {
+ * would just repeat the one above it.
+ *
+ * Multi-colony imports: if another pick in the same plan produces this
+ * exact material (its `id` matches `node.typeId`), a toggle offers "import
+ * this from <that colony> instead of building it here" — once marked, the
+ * node's own sub-tree (its P0/intermediate inputs) is pruned from this
+ * render, since it's already accounted for under the producing pick's own
+ * chain and listing it twice would double it up. */
+function ChainRow({
+  node,
+  depth,
+  siblingPicks,
+  imports,
+  onToggleImport,
+}: {
+  node: ChainNode;
+  depth: number;
+  siblingPicks: PlannerPick[];
+  imports: number[];
+  onToggleImport: (typeId: number) => void;
+}) {
   const p0 = node.tier === 1 ? node.children[0] : null;
+  const isImported = imports.includes(node.typeId);
+  const source = siblingPicks.find((sp) => sp.id === node.typeId);
   return (
     <div>
       <div
@@ -734,12 +803,49 @@ function ChainRow({ node, depth }: { node: ChainNode; depth: number }) {
             {formatInt(node.qtyPerCycle)}/cycle
           </span>
         )}
-        {p0 && <span className="text-xs text-zinc-500">← {p0.name} (P0)</span>}
-        <PlanetBadges planetTypes={node.planetTypes} tier={node.tier} />
+        {isImported ? (
+          <span className="rounded bg-indigo-950/60 px-2 py-0.5 text-xs text-indigo-300">
+            Imported
+            {source ? ` from ${source.planetName ?? source.name}` : ""}
+          </span>
+        ) : (
+          <>
+            {p0 && (
+              <span className="text-xs text-zinc-500">← {p0.name} (P0)</span>
+            )}
+            <PlanetBadges planetTypes={node.planetTypes} tier={node.tier} />
+          </>
+        )}
+        {(source || isImported) && (
+          <button
+            type="button"
+            onClick={() => onToggleImport(node.typeId)}
+            title={
+              isImported
+                ? "Stop treating this as imported — build it in this chain again"
+                : `Mark as imported from ${source?.name ?? ""} instead of building it here`
+            }
+            className={`rounded border px-1.5 py-0.5 text-[11px] ${
+              isImported
+                ? "border-indigo-600 bg-indigo-900/40 text-indigo-300"
+                : "border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+            }`}
+          >
+            {isImported ? "✓ Linked" : `⇄ Import from ${source?.name}`}
+          </button>
+        )}
       </div>
       {node.tier > 1 &&
+        !isImported &&
         node.children.map((c) => (
-          <ChainRow key={c.typeId} node={c} depth={depth + 1} />
+          <ChainRow
+            key={c.typeId}
+            node={c}
+            depth={depth + 1}
+            siblingPicks={siblingPicks}
+            imports={imports}
+            onToggleImport={onToggleImport}
+          />
         ))}
     </div>
   );

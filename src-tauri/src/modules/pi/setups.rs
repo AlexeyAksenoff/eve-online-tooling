@@ -51,6 +51,13 @@ struct StoredItem {
     planet_id: Option<i64>,
     #[serde(default)]
     planet_name: Option<String>,
+    /// Material type ids within this item's own production chain that are
+    /// marked "produced on another planned colony, ship it in instead" —
+    /// matched against another item's `type_id` in the same setup at read
+    /// time on the frontend (no SDE/cross-item resolution needed here,
+    /// same free-form pass-through as notes/system/planet).
+    #[serde(default)]
+    imports: Vec<i64>,
 }
 
 fn load(dir: &std::path::Path) -> Store {
@@ -73,6 +80,7 @@ pub struct SetupItem {
     pub system_name: Option<String>,
     pub planet_id: Option<i64>,
     pub planet_name: Option<String>,
+    pub imports: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -98,6 +106,7 @@ fn resolve(sde: &Sde, setup: &StoredSetup) -> PlannerSetup {
             system_name: e.system_name.clone(),
             planet_id: e.planet_id,
             planet_name: e.planet_name.clone(),
+            imports: e.imports.clone(),
         })
         .collect();
     PlannerSetup {
@@ -134,6 +143,8 @@ pub struct SaveSetupItem {
     pub planet_id: Option<i64>,
     #[serde(default)]
     pub planet_name: Option<String>,
+    #[serde(default)]
+    pub imports: Vec<i64>,
 }
 
 /// Save the current planner picks under a name, returning the resolved
@@ -183,6 +194,7 @@ pub fn pi_planner_setup_save(
                 system_name: i.system_name,
                 planet_id: i.planet_id,
                 planet_name: i.planet_name,
+                imports: i.imports,
             })
             .collect(),
     };
@@ -226,6 +238,7 @@ mod tests {
                     system_name: Some("Jita".into()),
                     planet_id: Some(40009082),
                     planet_name: Some("Jita IV".into()),
+                    imports: vec![],
                 },
                 StoredItem {
                     type_id: 999999,
@@ -234,6 +247,7 @@ mod tests {
                     system_name: None,
                     planet_id: None,
                     planet_name: None,
+                    imports: vec![],
                 },
             ],
         };
@@ -248,5 +262,30 @@ mod tests {
         // "Type <id>" placeholder instead of erroring the whole setup out.
         assert_eq!(resolved.items[1].name, "Type 999999");
         assert_eq!(resolved.items[1].system_id, None);
+    }
+
+    #[test]
+    fn resolve_carries_imported_material_type_ids_through_unchanged() {
+        let sde = fixture();
+        let setup = StoredSetup {
+            id: "multi-colony".into(),
+            name: "Multi colony".into(),
+            items: vec![StoredItem {
+                type_id: 9848,
+                notes: String::new(),
+                system_id: None,
+                system_name: None,
+                planet_id: None,
+                planet_name: None,
+                // Pretend 9838 (Mechanical Parts) is shipped in from
+                // another colony in the same setup instead of being
+                // produced locally.
+                imports: vec![9838],
+            }],
+        };
+
+        let resolved = resolve(&sde, &setup);
+
+        assert_eq!(resolved.items[0].imports, vec![9838]);
     }
 }

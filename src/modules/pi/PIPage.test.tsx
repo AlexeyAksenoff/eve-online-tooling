@@ -547,6 +547,128 @@ describe("PIPage Planner tab", () => {
     expect(screen.getByText("Ukomi Superconductors")).toBeInTheDocument();
   });
 
+  it("marks a chain material as imported from another planned colony, pruning its own sub-tree", async () => {
+    const ALL = [
+      { id: 9848, name: "Robotics" },
+      { id: 3689, name: "Mechanical Parts" },
+    ];
+    const MECHANICAL_PARTS_CHAIN: ChainNode = {
+      typeId: 3689,
+      name: "Mechanical Parts",
+      tier: 2,
+      qtyPerCycle: 0,
+      planetTypes: ["Barren", "Plasma"],
+      children: [
+        {
+          typeId: 2398,
+          name: "Reactive Metals",
+          tier: 1,
+          qtyPerCycle: 40,
+          planetTypes: ["Barren", "Gas", "Lava", "Plasma", "Storm"],
+          children: [
+            {
+              typeId: 2267,
+              name: "Base Metals",
+              tier: 0,
+              qtyPerCycle: 0,
+              planetTypes: ["Barren", "Gas", "Lava", "Plasma", "Storm"],
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    mockInvoke({
+      sde_status: () => SDE_INSTALLED,
+      auth_active_character: () => null,
+      pi_overview: () => [],
+      pi_locked_get: () => [],
+      sde_search_pi_commodities: (args) => {
+        const { query } = args as { query: string };
+        return ALL.filter((c) =>
+          c.name.toLowerCase().includes(query.toLowerCase()),
+        );
+      },
+      pi_production_chain: (args) => {
+        const { typeId } = args as { typeId: number };
+        return typeId === 9848 ? ROBOTICS_CHAIN : MECHANICAL_PARTS_CHAIN;
+      },
+      pi_planner_setup_save: () => ({
+        id: "multi-colony",
+        name: "Multi colony",
+        items: [],
+      }),
+    });
+    renderWithQuery(<PIPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Planner" }));
+    const search1 = screen.getByPlaceholderText(/search a p1-p4 commodity/i);
+    fireEvent.change(search1, { target: { value: "robo" } });
+    fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
+    await screen.findByText("Reactive Metals");
+
+    const search2 = screen.getByPlaceholderText(/search a p1-p4 commodity/i);
+    fireEvent.change(search2, { target: { value: "mechanical" } });
+    fireEvent.click(
+      await screen.findByRole(
+        "button",
+        { name: "Mechanical Parts" },
+        { timeout: 2000 },
+      ),
+    );
+
+    const roboticsCard = screen
+      .getByRole("button", { name: "Remove Robotics from planner" })
+      .closest("div.relative") as HTMLElement;
+    const mechPartsCard = (
+      await screen.findByRole("button", {
+        name: "Remove Mechanical Parts from planner",
+      })
+    ).closest("div.relative") as HTMLElement;
+
+    // Robotics' own chain still shows Mechanical Parts' full sub-tree
+    // until it's marked as imported.
+    expect(
+      within(roboticsCard).getByText("Reactive Metals"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      within(roboticsCard).getByRole("button", {
+        name: /Import from Mechanical Parts/,
+      }),
+    );
+
+    // Pruned: the sub-tree under the now-imported node is gone from
+    // Robotics' own render — it's already accounted for under the
+    // producing pick's own chain.
+    expect(
+      within(roboticsCard).queryByText("Reactive Metals"),
+    ).not.toBeInTheDocument();
+    expect(within(roboticsCard).getByText(/Imported/)).toBeInTheDocument();
+
+    // Reciprocal hint on the producing pick's own card.
+    expect(within(mechPartsCard).getByText(/Exported to/)).toBeInTheDocument();
+
+    // The link survives into a saved setup's payload.
+    fireEvent.click(screen.getByRole("button", { name: /save setup/i }));
+    fireEvent.change(screen.getByPlaceholderText(/^setup — /i), {
+      target: { value: "Multi colony" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "pi_planner_setup_save",
+        expect.objectContaining({
+          name: "Multi colony",
+          items: expect.arrayContaining([
+            expect.objectContaining({ typeId: 9848, imports: [3689] }),
+          ]),
+        }),
+      ),
+    );
+  });
+
   it("saves per-plan notes on blur", async () => {
     mockInvoke({
       sde_status: () => SDE_INSTALLED,
@@ -667,6 +789,7 @@ describe("PIPage Planner tab", () => {
           systemName: "Jita",
           planetId: 40009082,
           planetName: "Jita IV",
+          imports: [],
         },
       ],
     };
