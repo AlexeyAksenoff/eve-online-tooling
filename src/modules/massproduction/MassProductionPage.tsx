@@ -4,6 +4,7 @@ import {
   Check,
   ClipboardCopy,
   FolderOpen,
+  Loader2,
   RotateCcw,
   Save,
   Trash2,
@@ -613,6 +614,16 @@ function PlanResult({
   const locations = useMemo(() => assetLocations(assetRows), [assetRows]);
   const ownedIndex = useMemo(() => ownedQuantityIndex(assetRows), [assetRows]);
 
+  // A group's location <select> calls this on focus: if nothing's loaded
+  // yet and there's no fetch already in flight, kick one off silently —
+  // the select stays usable and shows a "Loading…" placeholder while it
+  // resolves, so opening the picker is enough to populate it without a
+  // separate "Load owned stock" click first.
+  const hasAssets = assetsQuery.data != null;
+  const requestAssets = () => {
+    if (!hasAssets && !assetsQuery.isFetching) void assetsQuery.refetch();
+  };
+
   return (
     <div className="flex flex-col gap-4">
       {plan.unresolvedNames.length > 0 && (
@@ -680,6 +691,8 @@ function PlanResult({
               group={g}
               locations={locations}
               ownedIndex={ownedIndex}
+              assetsFetching={assetsQuery.isFetching}
+              onRequestAssets={requestAssets}
             />
           ))}
         </div>
@@ -830,10 +843,14 @@ function GroupSection({
   group,
   locations,
   ownedIndex,
+  assetsFetching,
+  onRequestAssets,
 }: {
   group: MaterialGroup;
   locations: AssetLocation[];
   ownedIndex: Map<string, number>;
+  assetsFetching: boolean;
+  onRequestAssets: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [locationId, setLocationId] = useState<number | "">("");
@@ -874,16 +891,28 @@ function GroupSection({
                 e.currentTarget.value ? Number(e.currentTarget.value) : "",
               )
             }
+            onFocus={onRequestAssets}
             title="Subtract what the roster already has stocked at a location"
             className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 outline-none"
           >
-            <option value="">All locations — full quantity</option>
+            <option value="">
+              {assetsFetching && locations.length === 0
+                ? "Loading stock…"
+                : "All locations — full quantity"}
+            </option>
             {locations.map((loc) => (
               <option key={loc.id} value={loc.id}>
                 {loc.label}
               </option>
             ))}
           </select>
+          {assetsFetching && (
+            <Loader2
+              size={13}
+              className="animate-spin text-zinc-500"
+              aria-label="Loading stock…"
+            />
+          )}
           <button
             onClick={() => copy(multibuy)}
             title="Copy this group as a Multibuy-pasteable item list"

@@ -232,6 +232,67 @@ describe("MassProductionPage", () => {
     expect(screen.queryByText("5,010")).not.toBeInTheDocument();
   });
 
+  it("loads stock in the background with a wait signal when the location picker is focused", async () => {
+    const { promise: assetsPromise, resolve: resolveAssets } =
+      Promise.withResolvers<unknown>();
+    mockInvoke({
+      sde_status: () => SDE_OK,
+      massprod_plan: () => PLAN,
+      assets_load: () => assetsPromise,
+    });
+    renderWithQuery(<MassProductionPage />);
+
+    await pasteAndImport("5MN Microwarpdrive II Blueprint");
+    await screen.findByText("Mineral");
+
+    const select = screen.getByTitle(
+      "Subtract what the roster already has stocked at a location",
+    ) as HTMLSelectElement;
+    expect(invokeMock).not.toHaveBeenCalledWith("assets_load");
+
+    fireEvent.focus(select);
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("assets_load"));
+    expect(select.options[0].textContent).toBe("Loading stock…");
+    expect(
+      screen.getByRole("button", { name: "Loading stock…" }),
+    ).toBeInTheDocument();
+
+    resolveAssets({
+      rows: [
+        {
+          typeId: 11399,
+          name: "Morphite",
+          quantity: 5000,
+          sellPrice: 1000,
+          buyPrice: 900,
+          sellValue: 5_000_000,
+          buyValue: 4_500_000,
+          volume: 5000,
+          category: "Material",
+          group: "Mineral",
+          owner: "Alt One",
+          isCorp: false,
+          locationId: 60003760,
+          station: "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
+          solarSystem: "Jita",
+        },
+      ],
+      roots: [],
+      sellTotal: 5_000_000,
+      buyTotal: 4_500_000,
+      volumeTotal: 5000,
+    });
+
+    await screen.findByRole("option", {
+      name: "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
+    });
+    expect(select.options[0].textContent).toBe("All locations — full quantity");
+    expect(
+      screen.queryByRole("button", { name: "Loading stock…" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("sees locations the Assets page already loaded, without a separate fetch", async () => {
     mockInvoke({
       sde_status: () => SDE_OK,
