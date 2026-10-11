@@ -377,7 +377,7 @@ describe("PIPage Planner tab", () => {
     expect(screen.getAllByText("Lava")).toHaveLength(1);
   });
 
-  it("colors a material's planet-type badges green when they also build the whole root product, blue otherwise", async () => {
+  it("colors planet-type badges by tier: T1 blue, T2 green, T3 yellow", async () => {
     mockInvoke({
       sde_status: () => SDE_INSTALLED,
       auth_active_character: () => null,
@@ -394,14 +394,19 @@ describe("PIPage Planner tab", () => {
     });
     fireEvent.click(await screen.findByText("Robotics", {}, { timeout: 2000 }));
 
-    // Mechanical Parts' own planetTypes are ["Barren", "Plasma"]; the root
-    // (Robotics) is Plasma-only. Plasma also builds the whole chain → green;
-    // Barren only makes this one material → blue.
-    const row = (await screen.findByText("Mechanical Parts")).closest("div")!;
-    expect(within(row).getByText("Plasma").className).toContain(
+    // Root (Robotics) is P3 → yellow.
+    const rootRow = (await screen.findByText("Robotics")).parentElement!;
+    expect(within(rootRow).getByText("Plasma").className).toContain(
+      "bg-yellow-900/40",
+    );
+    // Mechanical Parts is P2 → green.
+    const p2Row = (await screen.findByText("Mechanical Parts")).closest("div")!;
+    expect(within(p2Row).getByText("Plasma").className).toContain(
       "bg-emerald-900/40",
     );
-    expect(within(row).getByText("Barren").className).toContain(
+    // Reactive Metals is P1 → blue.
+    const p1Row = (await screen.findByText("Reactive Metals")).closest("div")!;
+    expect(within(p1Row).getByText("Plasma").className).toContain(
       "bg-sky-900/40",
     );
   });
