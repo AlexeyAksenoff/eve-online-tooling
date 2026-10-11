@@ -49,7 +49,7 @@ export function ComparisonPanel({
   onClose: () => void;
 }) {
   const library = useFitLibrary();
-  const { skillSource, damageProfile, targetProfile } = useFitState();
+  const { skillSource, targetProfile } = useFitState();
   const [slots, setSlots] = useState<Slot[]>([currentFit, null]);
   const [results, setResults] = useState<Result[]>([null, null]);
   // Per-slot ammo override (#880): lets the same fit appear twice with
@@ -106,7 +106,7 @@ export function ComparisonPanel({
             return await fittingSimulate(
               loaded,
               skillSource,
-              damageProfile,
+              undefined,
               undefined,
               targetProfile,
             );

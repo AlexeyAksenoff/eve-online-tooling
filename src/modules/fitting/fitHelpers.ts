@@ -96,6 +96,13 @@ export function resistClass(v: number): string {
   return "text-zinc-600";
 }
 
+/** Dedicated effective HP a layer presents against one damage type: raw HP
+ *  divided by how much gets through after resists. `resist` of 1 (100%,
+ *  never happens in practice) yields `Infinity`, not a thrown error. */
+export function effectiveHp(hp: number, resist: number): number {
+  return hp / (1 - resist);
+}
+
 /** Collapse a fit's cargo hold to one stack per item type: identical cargo
  *  entries (common after an import that couldn't attach a charge to a weapon,
  *  e.g. the PVP "Simulate") are merged and their quantities summed. Non-cargo

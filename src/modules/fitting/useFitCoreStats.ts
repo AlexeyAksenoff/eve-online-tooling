@@ -33,7 +33,6 @@ export function useFitCoreStats(state: FitStateSlice): FitStatsSlice {
   const {
     fit,
     skillSource,
-    damageProfile,
     neutGjs,
     targetProfile,
     fleetBoosts,
@@ -83,7 +82,6 @@ export function useFitCoreStats(state: FitStateSlice): FitStatsSlice {
       "simulate",
       fitKey,
       skillSource,
-      damageProfile,
       neutGjs,
       targetProfile,
       fleetBoosts,
@@ -97,7 +95,7 @@ export function useFitCoreStats(state: FitStateSlice): FitStatsSlice {
           fittingSimulate(
             fit,
             skillSource,
-            damageProfile,
+            undefined,
             neutGjs,
             targetProfile,
             fleetBoosts.length > 0 ? fleetBoosts : undefined,

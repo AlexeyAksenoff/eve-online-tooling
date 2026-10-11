@@ -14,9 +14,10 @@ import { stackCargo } from "./fitHelpers";
 export type SetFit = (value: SetStateAction<Fit | null>) => void;
 
 /** The fit-editing state machine's raw client-side state: the current `Fit`
- *  plus every knob that feeds the simulate query (skills, jam, damage
- *  profile, target, fleet boosts, environment) but isn't itself derived from
- *  a query. No backend round-trips live here — see `useFitCoreMutations`. */
+ *  plus every knob that feeds the simulate query (skills, jam, neut
+ *  pressure, target, fleet boosts, environment) but isn't itself derived
+ *  from a query. No backend round-trips live here — see
+ *  `useFitCoreMutations`. */
 export interface FitStateSlice {
   fit: Fit | null;
   setFit: SetFit;
@@ -28,8 +29,6 @@ export interface FitStateSlice {
   skillLabel: string;
   jammed: boolean;
   setJammed: (v: boolean) => void;
-  damageProfile: [number, number, number, number] | undefined;
-  setDamageProfile: (p: [number, number, number, number] | undefined) => void;
   neutGjs: number | undefined;
   setNeutGjs: (n: number | undefined) => void;
   targetProfile: TargetProfile | undefined;
@@ -75,11 +74,8 @@ export function useFitCoreState(): FitStateSlice {
   // ECM is a chance-to-jam, not a continuous effect — so it's an opt-in "what if
   // the jam lands" view (targeting disabled), never a passive stat (#265).
   const [jammed, setJammed] = useState(false);
-  // Incoming damage profile + neut pressure for the simulate query — undefined
-  // means "let the backend default" (even damage, no neuts).
-  const [damageProfile, setDamageProfile] = useState<
-    [number, number, number, number] | undefined
-  >(undefined);
+  // Neut pressure for the simulate query — undefined means "let the backend
+  // default" (no neuts).
   const [neutGjs, setNeutGjs] = useState<number | undefined>(undefined);
   // Target profile for applied-DPS + the DPS-vs-range curve (#701); undefined
   // means "no target selected" (paper DPS only).
@@ -150,8 +146,6 @@ export function useFitCoreState(): FitStateSlice {
     skillLabel,
     jammed,
     setJammed,
-    damageProfile,
-    setDamageProfile,
     neutGjs,
     setNeutGjs,
     targetProfile,

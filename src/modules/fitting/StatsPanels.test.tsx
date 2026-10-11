@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { CapGauge, TankResists } from "./StatsPanels";
+import { CapGauge, TankResists, TankResistsPanel } from "./StatsPanels";
 import type { CapStats, TankStats } from "../../lib/api";
 
 function cap(overrides: Partial<CapStats>): CapStats {
@@ -73,5 +73,25 @@ describe("TankResists", () => {
     expect(
       screen.getByTitle("Hull vs EM: 3,000 effective HP (0% resisted)"),
     ).toBeInTheDocument();
+  });
+});
+
+describe("TankResistsPanel", () => {
+  it("shows EHP broken out per damage type instead of an incoming-damage picker", () => {
+    render(<TankResistsPanel skillLabel="all V" tank={tank({})} />);
+
+    // No more "Incoming damage" selector.
+    expect(screen.queryByText("Incoming damage")).not.toBeInTheDocument();
+
+    // EHP by damage type: shield + armor + hull effective HP, each
+    // assuming 100% of the damage is that one type.
+    // EM:  5000/(1-0)   + 4000/(1-0.5)  + 3000/(1-0) = 16000
+    // Th:  5000/(1-0.4) + 4000/(1-0.45) + 3000       = 18606
+    // Kin: 5000/(1-0.5) + 4000/(1-0.25) + 3000       = 18333
+    // Exp: 5000/(1-0.6) + 4000/(1-0.1)  + 3000       = 19944
+    expect(screen.getByText("16,000")).toBeInTheDocument();
+    expect(screen.getByText("18,606")).toBeInTheDocument();
+    expect(screen.getByText("18,333")).toBeInTheDocument();
+    expect(screen.getByText("19,944")).toBeInTheDocument();
   });
 });
