@@ -268,9 +268,17 @@ function Planner() {
   // Persisted across visits/reloads ("remember" — #963) rather than
   // session-only useState: the whole point is the plan survives navigating
   // away and coming back, not just a re-render.
-  const [picks, setPicks] = usePersistentState<PlannerPick[]>(
+  const [picksRaw, setPicks] = usePersistentState<PlannerPick[]>(
     STORAGE_KEYS.piPlannerPicks,
     [],
+  );
+  // `imports` was added after this storage key already had real data in
+  // it — a pre-existing pick's stored JSON has no `imports` key at all, so
+  // `JSON.parse` leaves it `undefined` rather than `[]`. Normalize once
+  // here so every reader below can assume `imports` is always an array.
+  const picks = useMemo(
+    () => picksRaw.map((p) => (p.imports ? p : { ...p, imports: [] })),
+    [picksRaw],
   );
   // The Combo's own controlled value — always reset to null right after an
   // add so the search field clears and is ready for the next pick, instead
