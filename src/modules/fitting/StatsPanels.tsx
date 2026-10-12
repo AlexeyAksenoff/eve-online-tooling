@@ -764,7 +764,7 @@ export function TankResistsPanel({
   tank: TankStats;
 }) {
   return (
-    <div className="space-y-1">
+    <div className="space-y-1 rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
       <h3 className="text-xs uppercase tracking-wide text-zinc-500">
         Tank ({skillLabel})
       </h3>
@@ -772,10 +772,10 @@ export function TankResistsPanel({
         <div className="text-[10px] uppercase tracking-wide text-zinc-500">
           EHP by damage type
         </div>
-        <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-sm tabular-nums">
+        <div className="space-y-0.5 text-sm tabular-nums">
           {DAMAGE_TYPES.map((d, i) => (
-            <span key={d}>
-              <span className="text-zinc-500">{d}</span>{" "}
+            <div key={d} className="flex items-center justify-between">
+              <span className="text-zinc-500">{d}</span>
               <span className="text-zinc-200">
                 {formatInt(
                   Math.round(
@@ -785,7 +785,7 @@ export function TankResistsPanel({
                   ),
                 )}
               </span>
-            </span>
+            </div>
           ))}
         </div>
       </div>
@@ -854,7 +854,7 @@ export function NavigationPanel({
   lockRange?: number;
 }) {
   return (
-    <div className="space-y-1">
+    <div className="space-y-1 rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
       <h3 className="text-xs uppercase tracking-wide text-zinc-500">
         Navigation
       </h3>

@@ -94,4 +94,11 @@ describe("TankResistsPanel", () => {
     expect(screen.getByText("18,333")).toBeInTheDocument();
     expect(screen.getByText("19,944")).toBeInTheDocument();
   });
+
+  it("renders the section in its own bordered box, like the Vitals headline", () => {
+    render(<TankResistsPanel skillLabel="all V" tank={tank({})} />);
+    const box = screen.getByText("Tank (all V)").closest("div");
+    expect(box?.className).toContain("rounded-lg");
+    expect(box?.className).toContain("border");
+  });
 });
