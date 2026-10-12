@@ -23,6 +23,10 @@ Project stack, commands, architecture, and naming conventions live in
   automatically once the required status checks pass. **Do not bypass checks**
   with `--admin` (or by force-merging) — let CI gate every merge, releases
   included.
+- **Never merge a pull request you didn't open together with the user in this
+  workflow.** Don't merge other people's open PRs, forks, or anything not
+  created as part of the current task — flag them instead and let the user
+  decide.
 - **Group related work into a single pull request.** Prefer one PR that covers
   a cohesive change (and its tests/docs) over many tiny PRs; don't open a
   separate PR for each small edit. Only split when the changes are genuinely
