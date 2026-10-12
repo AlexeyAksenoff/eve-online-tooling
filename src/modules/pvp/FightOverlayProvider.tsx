@@ -5,9 +5,11 @@ import {
   characterShip,
   pvpPilotFits,
   onDpsTick,
+  onDpsEvents,
   dpsStart,
   fittingListLocal,
   fittingSimulate,
+  type DpsEvent,
   type DpsTick,
   type Fit,
   type WeaponRange,
@@ -17,7 +19,10 @@ import { usePersistentState } from "../../lib/usePersistentState";
 import { useEveLogDir } from "../../lib/useEveLogDir";
 import { playCue, type CueSound } from "../../lib/sound";
 import { FIGHT_OVERLAY_SHIP_POLL_INTERVAL_MS } from "../../lib/refreshIntervals";
+import { STORAGE_KEYS } from "../../lib/storageKeys";
 import { Modal } from "../../components/Modal";
+import { CombatLogPanel } from "../dpsmeter/CombatLogPanel";
+import { appendEvents } from "../dpsmeter/dpsMeterShared";
 import { FightOverlayContext } from "./fightOverlayContext";
 
 /** Metres → compact km/m string. Used in AttackerCard and FightPanel. */
@@ -190,6 +195,9 @@ function AttackerCard({
 /** Fixed bottom-of-screen panel that appears when a fight is detected. */
 function FightPanel({
   ticks,
+  events,
+  logCollapsed,
+  onToggleLogCollapsed,
   attackers,
   myWeapons,
   localFits,
@@ -202,6 +210,9 @@ function FightPanel({
   onDismiss,
 }: {
   ticks: DpsTick[];
+  events: DpsEvent[];
+  logCollapsed: boolean;
+  onToggleLogCollapsed: () => void;
   attackers: {
     name: string;
     dpsIn: number;
@@ -396,6 +407,18 @@ function FightPanel({
           </div>
         </div>
       </div>
+
+      {/* Combat log footer — collapsed by default so it doesn't crowd the
+          3-column grid above; the same component the DPS meter page uses. */}
+      <div className="shrink-0 border-t border-zinc-800 px-5 py-2">
+        <CombatLogPanel
+          events={events}
+          collapsed={logCollapsed}
+          onToggleCollapsed={onToggleLogCollapsed}
+          maxHeightClass="max-h-32"
+          className="border-none bg-transparent p-0"
+        />
+      </div>
     </Modal>
   );
 }
@@ -407,6 +430,7 @@ function FightPanel({
  *  ranges, known ship, drone reminder) without a live fight. */
 interface TestFight {
   ticks: DpsTick[];
+  events: DpsEvent[];
   attackers: {
     name: string;
     dpsIn: number;
@@ -456,8 +480,63 @@ function buildTestFight(): TestFight {
       at: 1_700_000_000 + i,
     };
   });
+  // Sample combat log — one outgoing hit per tick, an incoming hit every third
+  // (two attackers alternating), plus one scram/point pair, so the Test
+  // preview exercises every line kind the real log renders.
+  const qualities = ["Hits", "Grazes", "Penetrates", "Wrecks", "Smashes"];
+  const events: DpsEvent[] = ticks.flatMap((t, i) => {
+    const dealt: DpsEvent = {
+      ts: t.at,
+      kind: "damageOut",
+      amount: Math.max(1, Math.round(t.dpsOut / 2)),
+      pilot: i % 2 === 0 ? "John Doe" : "Jane Doe",
+      ship: i % 2 === 0 ? "Kestrel" : "Incursus",
+      weapon: "Caldari Navy Inferno Rocket",
+      quality: qualities[i % qualities.length],
+      ore: null,
+      volume: 0,
+    };
+    if (i % 3 !== 0) return [dealt];
+    const taken: DpsEvent = {
+      ts: t.at,
+      kind: "damageIn",
+      amount: Math.max(1, Math.round(t.dpsIn / 2)),
+      pilot: i % 2 === 0 ? "John Doe" : "Jane Doe",
+      ship: i % 2 === 0 ? "Kestrel" : "Incursus",
+      weapon: i % 2 === 0 ? "Inferno Rage Rocket" : "Light Ion Blaster II",
+      quality: qualities[(i + 2) % qualities.length],
+      ore: null,
+      volume: 0,
+    };
+    return [dealt, taken];
+  });
+  events.push(
+    {
+      ts: 1_700_000_010,
+      kind: "scramIn",
+      amount: 0,
+      pilot: "Jane Doe",
+      ship: "Incursus",
+      weapon: null,
+      quality: null,
+      ore: null,
+      volume: 0,
+    },
+    {
+      ts: 1_700_000_018,
+      kind: "pointOut",
+      amount: 0,
+      pilot: "John Doe",
+      ship: "Kestrel",
+      weapon: null,
+      quality: null,
+      ore: null,
+      volume: 0,
+    },
+  );
   return {
     ticks,
+    events,
     attackers: [
       {
         name: "John Doe",
@@ -498,11 +577,17 @@ export function FightOverlayProvider({ children }: { children: ReactNode }) {
     false,
   );
   const [fightTicks, setFightTicks] = useState<DpsTick[]>([]);
+  const [fightLogEvents, setFightLogEvents] = useState<DpsEvent[]>([]);
+  const [logCollapsed, setLogCollapsed] = usePersistentState<boolean>(
+    STORAGE_KEYS.fightOverlayCombatLogCollapsed,
+    true,
+  );
   const [fightOpen, setFightOpen] = useState(false);
   const [selectedFitId, setSelectedFitId] = useState<string | null>(null);
   // Settings "Test" preview: sample data, rebuilt each time the button is hit.
   const [testFight, setTestFight] = useState<TestFight | null>(null);
   const unlistenRef = useRef<(() => void) | null>(null);
+  const unlistenEventsRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!enabled) {
@@ -522,6 +607,33 @@ export function FightOverlayProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       unlistenRef.current?.();
       unlistenRef.current = null;
+    };
+  }, [enabled]);
+
+  // Combat-log view alongside the tick chart — the same batched events, kept
+  // for as long as `fightTicks` is (cleared on the same two resets: disabling
+  // the overlay and Dismiss). Not gated by the tick freeze logic: once a fight
+  // freezes, any further activity is rare and still truthful to show, and
+  // trying to detect the freeze from this independent event stream would lag
+  // a poll cycle behind the tick that actually freezes it.
+  useEffect(() => {
+    if (!enabled) {
+      unlistenEventsRef.current?.();
+      unlistenEventsRef.current = null;
+      setFightLogEvents([]);
+      return;
+    }
+    let cancelled = false;
+    onDpsEvents((batch) => {
+      if (!cancelled) setFightLogEvents((prev) => appendEvents(prev, batch));
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlistenEventsRef.current = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlistenEventsRef.current?.();
+      unlistenEventsRef.current = null;
     };
   }, [enabled]);
 
@@ -685,6 +797,9 @@ export function FightOverlayProvider({ children }: { children: ReactNode }) {
       {testFight ? (
         <FightPanel
           ticks={testFight.ticks}
+          events={testFight.events}
+          logCollapsed={logCollapsed}
+          onToggleLogCollapsed={() => setLogCollapsed(!logCollapsed)}
           attackers={testFight.attackers}
           myWeapons={testFight.myWeapons}
           localFits={localFits.data ?? []}
@@ -700,6 +815,9 @@ export function FightOverlayProvider({ children }: { children: ReactNode }) {
         fightActive && (
           <FightPanel
             ticks={fightTicks}
+            events={fightLogEvents}
+            logCollapsed={logCollapsed}
+            onToggleLogCollapsed={() => setLogCollapsed(!logCollapsed)}
             attackers={activeAttackers}
             myWeapons={latestTick?.byWeapon ?? []}
             localFits={localFits.data ?? []}
@@ -714,6 +832,7 @@ export function FightOverlayProvider({ children }: { children: ReactNode }) {
             onDismiss={() => {
               setFightOpen(false);
               setFightTicks([]);
+              setFightLogEvents([]);
             }}
           />
         )

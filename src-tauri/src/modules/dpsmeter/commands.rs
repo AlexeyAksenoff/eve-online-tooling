@@ -4,8 +4,11 @@
 //! the SDE refresh in `lib.rs`) that seeks to the end of the newest gamelog,
 //! then every ~500 ms reads whatever the EVE client appended, parses each combat
 //! line ([`super::parser`]), feeds a rolling [`Window`], and `emit`s a
-//! `dps://tick` (the same event pattern as `sde://progress`). The frontend
-//! `listen`s and draws the graph.
+//! `dps://tick` (the same event pattern as `sde://progress`) plus the raw,
+//! fully-resolved [`super::parser::DpsEvent`]s parsed that poll on
+//! `dps://events` — one batch per poll, in the same order they'll be pushed
+//! into the window, for a scrolling combat-log view alongside the rate
+//! graph. The frontend `listen`s to both and draws the graph / log.
 //!
 //! Lifecycle is a generation counter held in [`DpsState`]: each `dps_start`
 //! bumps it and the loop runs only while its captured generation is current, so
@@ -25,7 +28,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom
 
 use super::aggregate::Window;
 use super::overview::{parse_overview_export, ExtractionPlan};
-use super::parser::{parse_line, parse_line_with_plan, EventKind, Lang};
+use super::parser::{parse_line, parse_line_with_plan, DpsEvent, EventKind, Lang};
 use crate::model::AppError;
 use crate::sde::{Sde, SdePaths};
 
@@ -149,7 +152,8 @@ pub struct LogSummary {
 }
 
 /// Start (or restart) tailing the newest gamelog in `settings.gamelogs_dir`.
-/// Returns immediately; ticks arrive on the `dps://tick` event.
+/// Returns immediately; ticks arrive on `dps://tick`, raw combat-log events
+/// on `dps://events`.
 #[tauri::command]
 pub async fn dps_start(
     app: AppHandle,
@@ -220,14 +224,14 @@ pub async fn dps_start(
             if let Some(path) = &current {
                 if let Some((text, next)) = read_appended(path, offset).await {
                     offset = next;
-                    let mut batch: Vec<_> = text
+                    let mut batch: Vec<DpsEvent> = text
                         .lines()
                         .flat_map(|l| {
                             parse_line_with_plan(l, lang, settings.extraction_plan.as_ref())
                         })
                         .collect();
                     resolve_ore_volumes(&batch, &mut ore_vol, sde_db.as_deref());
-                    for mut ev in batch.drain(..) {
+                    for ev in &mut batch {
                         if ev.kind == EventKind::Mining {
                             let per_unit = ev
                                 .ore
@@ -237,6 +241,16 @@ pub async fn dps_start(
                                 .unwrap_or(0.0);
                             ev.volume = ev.amount as f64 * per_unit;
                         }
+                    }
+                    // Combat-log panel (DPS Meter + the PVP fight overlay):
+                    // the resolved events this poll just parsed, batched the
+                    // same way ticks are — emitted before the window
+                    // consumes them below, so the log and the DPS graph
+                    // never drift out of sync with each other.
+                    if !batch.is_empty() {
+                        let _ = app.emit("dps://events", &batch);
+                    }
+                    for ev in batch.drain(..) {
                         win.push(ev);
                     }
                 }
@@ -341,7 +355,8 @@ fn seek_start(
 }
 
 /// Replay a past gamelog through the same tick pipeline at `speed`× real time.
-/// Emits `dps://tick` exactly like a live capture, so the UI is identical.
+/// Emits `dps://tick` and `dps://events` exactly like a live capture, so the
+/// UI (graph and combat log alike) is identical either way.
 /// `settings.seek_ts` (set by dragging the timeline slider) starts the virtual
 /// clock mid-file instead of at the first event; the window is pre-warmed with
 /// the trailing `window_secs` of history so the DPS readout isn't cold at the
@@ -409,9 +424,16 @@ pub async fn dps_playback(
             }
             vt += step;
             let now = vt as i64;
+            let mut batch: Vec<DpsEvent> = Vec::new();
             while idx < events.len() && events[idx].ts <= now {
-                win.push(events[idx].clone());
+                batch.push(events[idx].clone());
                 idx += 1;
+            }
+            if !batch.is_empty() {
+                let _ = app.emit("dps://events", &batch);
+            }
+            for ev in batch {
+                win.push(ev);
             }
             let mut tick = win.tick(now);
             attach_weapon_kinds(&mut tick, &mut weapon_kinds, sde_db.as_deref());

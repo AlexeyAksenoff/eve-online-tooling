@@ -26,3 +26,9 @@ if (typeof globalThis.ResizeObserver === "undefined") {
     disconnect() {}
   } as unknown as typeof ResizeObserver;
 }
+
+// jsdom doesn't implement scrolling — the DPS meter / fight overlay combat
+// log and LogsPage both auto-scroll their newest line into view on update.
+if (typeof Element.prototype.scrollIntoView === "undefined") {
+  Element.prototype.scrollIntoView = () => {};
+}

@@ -1,4 +1,7 @@
 import { Page, PageHeader } from "../../components/page";
+import { STORAGE_KEYS } from "../../lib/storageKeys";
+import { usePersistentState } from "../../lib/usePersistentState";
+import { CombatLogPanel } from "./CombatLogPanel";
 import { DpsChartContainer } from "./DpsChartContainer";
 import { SERIES, formatRate } from "./dpsMeterShared";
 import { FightBreakdown, TackleTags } from "./FightBreakdown";
@@ -12,6 +15,10 @@ import { useDpsPlayback } from "./useDpsPlayback";
 
 export function DpsPage() {
   const dps = useDpsPlayback();
+  const [logCollapsed, setLogCollapsed] = usePersistentState<boolean>(
+    STORAGE_KEYS.dpsCombatLogCollapsed,
+    false,
+  );
 
   return (
     <Page>
@@ -228,6 +235,13 @@ export function DpsPage() {
         latest={dps.latest}
         pilotRows={dps.pilotRows}
         colors={dps.sourceColors}
+      />
+
+      <CombatLogPanel
+        events={dps.logEvents}
+        collapsed={logCollapsed}
+        onToggleCollapsed={() => setLogCollapsed(!logCollapsed)}
+        className="mt-4"
       />
 
       {!dps.running && dps.ticks.length === 0 && (

@@ -13,7 +13,9 @@ import {
   dpsStop,
   errorMessage,
   onDpsDone,
+  onDpsEvents,
   onDpsTick,
+  type DpsEvent,
   type DpsExtractionPlan,
   type DpsLogFile,
   type DpsLogSummary,
@@ -24,7 +26,9 @@ import { useEveLogDir } from "../../lib/useEveLogDir";
 import { usePersistentState } from "../../lib/usePersistentState";
 import {
   BUFFER,
+  LOG_BUFFER,
   MINING_BUCKET_SECS,
+  appendEvents,
   appendTick,
   type ChartLayout,
   type Mode,
@@ -63,6 +67,7 @@ export function useDpsPlaybackState() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ticks, setTicks] = useState<DpsTick[]>([]);
+  const [logEvents, setLogEvents] = useState<DpsEvent[]>([]);
   const [mode, setMode] = useState<Mode>("live");
   const [logs, setLogs] = useState<DpsLogFile[]>([]);
   const [file, setFile] = useState("");
@@ -111,6 +116,7 @@ export function useDpsPlaybackState() {
   const activeRef = useRef(active);
   activeRef.current = active;
   const bufferedRef = useRef<DpsTick[]>([]);
+  const bufferedEventsRef = useRef<DpsEvent[]>([]);
   // Session peaks for the two primary readouts (reset on Start / Play).
   const peaksRef = useRef({ out: 0, in: 0 });
   // Mined volume per 15 s bucket (bucket start-epoch → m³), session-lifetime.
@@ -215,6 +221,26 @@ export function useDpsPlaybackState() {
     return () => unlisten?.();
   }, []);
 
+  // Combat-log view: the same batched events that feed each tick, for a
+  // scrolling line-by-line log alongside the rate graph. Subscribed
+  // separately from ticks (different payload shape/cadence relationship —
+  // zero, one, or many events can land between two ticks) but mirrors the
+  // exact same hidden-page buffering so the log doesn't re-render 2×/s while
+  // the page is backgrounded either.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    onDpsEvents((batch) => {
+      if (!activeRef.current) {
+        const buf = bufferedEventsRef.current;
+        buf.push(...batch);
+        if (buf.length > LOG_BUFFER) buf.splice(0, buf.length - LOG_BUFFER);
+        return;
+      }
+      setLogEvents((prev) => appendEvents(prev, batch));
+    }).then((u) => (unlisten = u));
+    return () => unlisten?.();
+  }, []);
+
   // Stable ref for loop: always holds the current playback params so the
   // done-handler can restart without capturing stale closure values.
   const loopParamsRef = useRef({
@@ -244,6 +270,7 @@ export function useDpsPlaybackState() {
       // Small pause so the final tick renders before the restart clears ticks.
       setTimeout(() => {
         setTicks([]);
+        setLogEvents([]);
         peaksRef.current = { out: 0, in: 0 };
         miningRef.current = { buckets: new Map(), lastAt: null };
         setSelectedPilot(null);
@@ -267,15 +294,22 @@ export function useDpsPlaybackState() {
 
   // On becoming visible again, flush whatever arrived while hidden in one update.
   useEffect(() => {
-    if (!active || bufferedRef.current.length === 0) return;
-    const buffered = bufferedRef.current;
-    bufferedRef.current = [];
-    setTicks((prev) => {
-      const merged = prev.concat(buffered);
-      return merged.length > BUFFER
-        ? merged.slice(merged.length - BUFFER)
-        : merged;
-    });
+    if (!active) return;
+    if (bufferedRef.current.length > 0) {
+      const buffered = bufferedRef.current;
+      bufferedRef.current = [];
+      setTicks((prev) => {
+        const merged = prev.concat(buffered);
+        return merged.length > BUFFER
+          ? merged.slice(merged.length - BUFFER)
+          : merged;
+      });
+    }
+    if (bufferedEventsRef.current.length > 0) {
+      const buffered = bufferedEventsRef.current;
+      bufferedEventsRef.current = [];
+      setLogEvents((prev) => appendEvents(prev, buffered));
+    }
   }, [active]);
 
   async function start(win = windowSecs) {
@@ -333,6 +367,7 @@ export function useDpsPlaybackState() {
   async function playback(seekTs?: number, stopTs?: number, win = windowSecs) {
     setError(null);
     setTicks([]);
+    setLogEvents([]);
     peaksRef.current = { out: 0, in: 0 };
     miningRef.current = { buckets: new Map(), lastAt: null };
     setSelectedPilot(null);
@@ -532,6 +567,7 @@ export function useDpsPlaybackState() {
     running,
     error,
     ticks,
+    logEvents,
     mode,
     switchMode,
     logs,
