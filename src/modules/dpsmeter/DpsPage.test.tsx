@@ -3,19 +3,26 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { invokeMock, mockInvoke, renderWithQuery } from "../../test/harness";
 import { DpsPage } from "./DpsPage";
 import type {
+  DpsEvent,
   DpsLogFile,
   DpsLogSummary,
   DpsPlaybackSettings,
   DpsTick,
 } from "../../lib/api";
 
-// DpsPage subscribes to live ticks via `listen`; capture the `dps://tick`
-// callback so a test can push a tick and drive the current playback position.
+// DpsPage subscribes to live ticks + combat-log events via `listen`; capture
+// both callbacks so a test can push a tick/events batch directly.
 let tickHandler: ((t: DpsTick) => void) | undefined;
+let eventsHandler: ((events: DpsEvent[]) => void) | undefined;
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: (name: string, handler: (e: { payload: DpsTick }) => void) => {
+  listen: (
+    name: string,
+    handler: (e: { payload: DpsTick | DpsEvent[] }) => void,
+  ) => {
     if (name === "dps://tick")
       tickHandler = (t: DpsTick) => handler({ payload: t });
+    if (name === "dps://events")
+      eventsHandler = (events: DpsEvent[]) => handler({ payload: events });
     return Promise.resolve(() => {});
   },
 }));
@@ -115,6 +122,7 @@ beforeEach(() => {
   invokeMock.mockReset();
   localStorage.clear();
   tickHandler = undefined;
+  eventsHandler = undefined;
 });
 
 describe("DpsPage — playback file picker", () => {
@@ -255,5 +263,43 @@ describe("DpsPage — playback timeline", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("DpsPage — combat log", () => {
+  it("renders an events batch pushed over dps://events, newest line appended", async () => {
+    mockInvoke({});
+    renderWithQuery(<DpsPage />);
+
+    // The subscription is live as soon as the page mounts — no Start needed.
+    await waitFor(() => expect(eventsHandler).toBeDefined());
+    act(() =>
+      eventsHandler!([
+        {
+          ts: 1_700_000_000,
+          kind: "damageOut",
+          amount: 450,
+          pilot: "Target Pilot",
+          ship: "Cruiser",
+          weapon: "Dual Giga Pulse Laser II",
+          quality: "Wrecks",
+          ore: null,
+          volume: 0,
+        },
+      ]),
+    );
+
+    expect(
+      await screen.findByText(
+        /450 dmg → Target Pilot \(Cruiser\) — Dual Giga Pulse Laser II \[Wrecks\]/,
+      ),
+    ).toBeInTheDocument();
+
+    // Collapsing hides the lines without losing them — expanding again shows
+    // the same event, proving the buffer lives above the panel, not inside it.
+    fireEvent.click(screen.getByRole("button", { name: /Combat log/ }));
+    expect(screen.queryByText(/Target Pilot/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Combat log/ }));
+    expect(screen.getByText(/Target Pilot/)).toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import type { DpsTick } from "../../lib/api";
+import type { DpsEvent, DpsTick } from "../../lib/api";
 import { formatInt } from "../../lib/format";
 
 export type Mode = "live" | "playback";
@@ -130,6 +130,18 @@ export function appendTick(prev: DpsTick[], t: DpsTick): DpsTick[] {
   const next = prev.length >= BUFFER ? prev.slice(1) : prev.slice();
   next.push(t);
   return next;
+}
+
+// How many combat-log lines to keep on screen — generous enough to scroll
+// back through a real fight without unbounded memory growth.
+export const LOG_BUFFER = 500;
+
+/** Append a batch of combat-log events (one `dps://events` payload is
+ *  everything a single poll parsed, so more than one often arrives at
+ *  once) to the rolling log, dropping the oldest past `LOG_BUFFER`. */
+export function appendEvents(prev: DpsEvent[], batch: DpsEvent[]): DpsEvent[] {
+  const next = prev.concat(batch);
+  return next.length > LOG_BUFFER ? next.slice(next.length - LOG_BUFFER) : next;
 }
 
 // Finest mining bucket granularity (s). Volumes accumulate at this resolution;

@@ -32,6 +32,8 @@ export const STORAGE_KEYS = {
   dpsLooping: "dps.looping",
   dpsOverviewExportFile: "dps.overviewExportFile",
   dpsCharacter: "dps.character",
+  dpsCombatLogCollapsed: "dps.combatLogCollapsed",
+  fightOverlayCombatLogCollapsed: "pvp.fightOverlayCombatLogCollapsed",
   // Local Intel
   localintelSound: "localintel.sound",
   localintelAlertNeutrals: "localintel.alertNeutrals",

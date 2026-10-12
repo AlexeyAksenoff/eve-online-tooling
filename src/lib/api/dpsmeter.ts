@@ -75,6 +75,42 @@ export interface DpsTick {
   at: number;
 }
 
+/** What a parsed combat line represents — mirrors Rust's `EventKind`. */
+export type DpsEventKind =
+  | "damageOut"
+  | "damageIn"
+  | "repOut"
+  | "repIn"
+  | "capTransferOut"
+  | "capTransferIn"
+  | "capWarfareOut"
+  | "capWarfareIn"
+  | "scramOut"
+  | "scramIn"
+  | "pointOut"
+  | "pointIn"
+  | "mining";
+
+/** One parsed combat-log line, for a scrolling log view (as opposed to
+ *  {@link DpsTick}'s rolling-window rates). `pilot`/`ship`/`weapon` are
+ *  populated for damage lines, `None` otherwise. */
+export interface DpsEvent {
+  /** Epoch seconds, parsed from the gamelog's own timestamp. */
+  ts: number;
+  kind: DpsEventKind;
+  /** Damage/repair/capacitor amount, or mined units — always positive. */
+  amount: number;
+  pilot: string | null;
+  ship: string | null;
+  weapon: string | null;
+  /** Hit quality on damage lines ("Grazes" … "Wrecks"); `null` otherwise. */
+  quality: string | null;
+  /** Mined ore type name (mining lines only). */
+  ore: string | null;
+  /** Mined volume in m³ (mining only). */
+  volume: number;
+}
+
 /** A ship-label field from an overview export (#869); `"other"` covers any
  *  label this app doesn't capture (faction, custom-pack extra slots, …) —
  *  its separators still occupy space in the parsed layout. */
@@ -219,6 +255,14 @@ export function onDpsTick(
   handler: (tick: DpsTick) => void,
 ): Promise<UnlistenFn> {
   return listen<DpsTick>("dps://tick", (event) => handler(event.payload));
+}
+
+/** Subscribe to raw combat-log events — one batch per poll, in the order
+ *  they'll land in the next tick, for a scrolling log view. */
+export function onDpsEvents(
+  handler: (events: DpsEvent[]) => void,
+): Promise<UnlistenFn> {
+  return listen<DpsEvent[]>("dps://events", (event) => handler(event.payload));
 }
 
 /** Subscribe to natural playback-end notifications (loop support). */
